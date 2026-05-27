@@ -332,7 +332,15 @@ def suggested_arv(comps: List[Dict[str, Any]], subject_sqft: Optional[int] = Non
         return {"avg_sale": 0, "median_sale": 0, "avg_psf_times_sqft": 0,
                 "median_psf_times_sqft": 0, "suggested": 0}
     prices = [c["sold_price"] for c in selected]
-    psf = [c["dollar_per_sqft"] for c in selected if c.get("dollar_per_sqft")]
+    # Compute dollar_per_sqft on the fly if not present (the Streamlit data
+    # editor drops the column when displaying, so it's often missing here).
+    psf = []
+    for c in selected:
+        psf_val = c.get("dollar_per_sqft")
+        if not psf_val and c.get("sqft") and c.get("sold_price"):
+            psf_val = c["sold_price"] / c["sqft"]
+        if psf_val:
+            psf.append(psf_val)
     avg_sale = sum(prices) / len(prices)
     sorted_p = sorted(prices)
     median_sale = (sorted_p[len(sorted_p)//2] if len(sorted_p) % 2
