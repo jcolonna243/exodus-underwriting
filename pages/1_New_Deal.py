@@ -20,7 +20,7 @@ from modules.comp_import import parse_comp_file, suggested_arv
 from modules.memo import build_word_memo, build_pdf_memo
 from modules.db import save_deal, save_chat_bulk
 from modules import chat as chat_mod
-
+from modules import property_lookup
 st.set_page_config(page_title="New Deal", page_icon="📝", layout="wide")
 user = require_login()
 sidebar_account_widget()
@@ -32,25 +32,74 @@ st.title("📝 New Deal Analysis")
 # ============================================================================
 st.markdown("### 1. Property Details")
 
-c1, c2, c3 = st.columns([3, 1, 1])
-address = c1.text_input("Address", key="address",
-                        placeholder="8420 SW 152nd St")
-city = c2.text_input("City", value="Miami", key="city")
-state = c3.text_input("State", value="FL", key="state")
+# Address + "Look up property" button on their own row
+c_addr, c_btn = st.columns([5, 1])
+address = c_addr.text_input(
+    "Address", key="address",
+    placeholder="8420 SW 152nd St, Miami, FL 33176",
+    help="Type or paste the full address, then click Look up to auto-fill the rest.",
+)
+with c_btn:
+    st.markdown("&nbsp;", unsafe_allow_html=True)  # vertical spacer for button alignment
+    do_lookup = st.button(
+        "🔍 Look up",
+        use_container_width=True,
+        help="Auto-fill city/state/zip/beds/baths/sqft/year/pool/HOA from "
+             "RentCast public records.",
+    )
+
+# Lookup handler runs BEFORE the remaining widgets render, so session_state
+# updates take effect immediately on this run.
+if do_lookup:
+    if not property_lookup.is_configured():
+        st.warning("⚠️ RentCast API key not configured. Add `[rentcast] api_key` "
+                   "to Streamlit Secrets.")
+    elif not (address or "").strip():
+        st.warning("Type an address first.")
+    else:
+        with st.spinner("Looking up property records…"):
+            result = property_lookup.lookup_property(address)
+        if result.get("found"):
+            updated = []
+            for field in ["city", "state", "zip", "beds", "baths", "sqft",
+                          "year", "pool", "hoa"]:
+                v = result.get(field)
+                if v not in (None, 0, "", "0"):
+                    st.session_state[field] = v
+                    updated.append(field)
+            # Also normalize the address line if RentCast returned a cleaner version
+            if result.get("address"):
+                st.session_state["address"] = result["address"]
+            loc = (f"{result.get('city', '')}, {result.get('state', '')} "
+                   f"{result.get('zip', '')}").strip().strip(",").strip()
+            st.success(
+                f"✅ Found {result.get('address', '')} — {loc}. "
+                f"Filled: {', '.join(updated) if updated else '(no new data)'}."
+            )
+            st.rerun()
+        elif result.get("error"):
+            st.error(f"Lookup failed: {result['error']}")
+        else:
+            st.warning("No property records found for that address. "
+                       "Enter the details manually below.")
+
+c1, c2, c3 = st.columns([2, 1, 1])
+city = c1.text_input("City", value="Miami", key="city")
+state = c2.text_input("State", value="FL", key="state")
+zip_code = c3.text_input("ZIP", key="zip")
 
 c1, c2, c3, c4 = st.columns(4)
-zip_code = c1.text_input("ZIP", key="zip")
-beds = c2.number_input("Beds", min_value=0, max_value=20, value=3, key="beds")
-baths = c3.number_input("Baths", min_value=0.0, max_value=20.0, step=0.5,
+beds = c1.number_input("Beds", min_value=0, max_value=20, value=3, key="beds")
+baths = c2.number_input("Baths", min_value=0.0, max_value=20.0, step=0.5,
                         value=2.0, key="baths")
-sqft = c4.number_input("Living Sqft", min_value=0, value=1500, step=50, key="sqft")
-
-c1, c2, c3, c4 = st.columns(4)
-year = c1.number_input("Year Built", min_value=1900, max_value=2030,
+sqft = c3.number_input("Living Sqft", min_value=0, value=1500, step=50, key="sqft")
+year = c4.number_input("Year Built", min_value=1900, max_value=2030,
                        value=1980, key="year")
-pool = c2.selectbox("Pool?", ["No", "Yes"], key="pool")
-hoa = c3.number_input("HOA Monthly", min_value=0, value=0, step=25, key="hoa")
-asking = c4.number_input("Seller's Asking Price",
+
+c1, c2, c3 = st.columns(3)
+pool = c1.selectbox("Pool?", ["No", "Yes"], key="pool")
+hoa = c2.number_input("HOA Monthly", min_value=0, value=0, step=25, key="hoa")
+asking = c3.number_input("Seller's Asking Price",
                          min_value=0, value=0, step=1000, key="asking",
                          help="What the seller publicly wants for the property.")
 
