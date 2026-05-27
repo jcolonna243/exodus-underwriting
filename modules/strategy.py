@@ -1,3 +1,4 @@
+# v2 — rehab_breakdown added
 """Core strategy decision logic — ported from Exodus Underwriting Tool v3 Excel.
 
 This module is a pure-Python replica of every formula on the v3 spreadsheet.
