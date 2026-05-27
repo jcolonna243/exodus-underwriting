@@ -14,8 +14,7 @@ import pandas as pd
 from io import BytesIO
 from modules.auth import require_login, sidebar_account_widget
 from modules.strategy import (compute_recommendation, DEFAULTS,
-                              rehab_subtotal, rehab_with_contingency,
-                              suggested_arv as _sa)
+                              rehab_subtotal, rehab_with_contingency,)                         
 from modules.comp_import import parse_comp_file, suggested_arv
 from modules.memo import build_word_memo, build_pdf_memo
 from modules.db import save_deal
