@@ -14,7 +14,8 @@ import pandas as pd
 from io import BytesIO
 from modules.auth import require_login, sidebar_account_widget
 from modules.strategy import (compute_recommendation, DEFAULTS,
-                              rehab_subtotal, rehab_with_contingency,)                         
+                              rehab_subtotal, rehab_with_contingency,
+                              rehab_breakdown)
 from modules.comp_import import parse_comp_file, suggested_arv
 from modules.memo import build_word_memo, build_pdf_memo
 from modules.db import save_deal
@@ -68,10 +69,11 @@ if "comps_df" not in st.session_state:
     st.session_state.comps_df = None
 
 upload = st.file_uploader(
-    "Upload your realtor's MLS export (CSV or Excel)",
-    type=["csv", "xlsx", "xls"],
-    help="Auto-parses common MLS export formats and populates the candidates "
-         "table below. Uncheck rows that don't fit; Suggested ARV recalculates.",
+    "Upload your realtor's comp report (PDF, CSV, or Excel)",
+    type=["pdf", "csv", "xlsx", "xls"],
+    help="Auto-parses common MLS export formats and PDF Comparable Sales Reports "
+         "(PropStream-style). Populates the candidates table below — uncheck rows "
+         "that don't fit, and Suggested ARV recalculates.",
 )
 if upload is not None:
     try:
@@ -112,13 +114,30 @@ if st.session_state.comps_df is not None and not st.session_state.comps_df.empty
     selected = edited[edited["use"] == True].to_dict("records") if "use" in edited.columns else edited.to_dict("records")
     arv_info = suggested_arv(selected, subject_sqft=sqft)
 
-    cA, cB, cC, cD, cE = st.columns(5)
+    cA, cB, cC, cD = st.columns(4)
     cA.metric("Avg sale", f"${arv_info['avg_sale']:,.0f}")
     cB.metric("Median sale", f"${arv_info['median_sale']:,.0f}")
-    cC.metric("Avg $/sqft × subj", f"${arv_info['avg_psf_times_sqft']:,.0f}")
-    cD.metric("Med $/sqft × subj", f"${arv_info['median_psf_times_sqft']:,.0f}")
-    cE.metric("Suggested ARV", f"${arv_info['suggested']:,.0f}")
-    st.session_state.suggested_arv = arv_info["suggested"]
+    cC.metric("Avg $/sqft × subject", f"${arv_info['avg_psf_times_sqft']:,.0f}")
+    cD.metric("Median $/sqft × subject", f"${arv_info['median_psf_times_sqft']:,.0f}")
+
+    # ARV calculation method — Option D: user picks per deal
+    method_to_value = {
+        "Suggested (avg of all methods)": arv_info["suggested"],
+        "Avg sale price (ignores sqft)": arv_info["avg_sale"],
+        "Median sale price (ignores sqft)": arv_info["median_sale"],
+        "Avg $/sqft × subject sqft": arv_info["avg_psf_times_sqft"],
+        "Median $/sqft × subject sqft": arv_info["median_psf_times_sqft"],
+    }
+    arv_method = st.radio(
+        "ARV calculation method",
+        options=list(method_to_value.keys()),
+        index=0,
+        help=("Pick which method the tool uses to populate ARV. The $/sqft methods "
+              "are more accurate when your subject differs in size from the comps."),
+    )
+    chosen_arv = method_to_value[arv_method]
+    st.success(f"**{arv_method}** → **${chosen_arv:,.0f}**")
+    st.session_state.suggested_arv = chosen_arv
 else:
     st.info("Upload a comp file above, or enter ARV manually below.")
     st.session_state.suggested_arv = 0
@@ -200,7 +219,7 @@ with st.container(border=True):
                 ["Replace Motor", "Replace Pump", "Heater",
                  "Waterline Tile", "Diamond Brite"], "Replace Motor")
 
-# Live rehab total
+# Live rehab total + line-item breakdown
 sub_total = rehab_subtotal(st.session_state.rehab, sqft, baths, pool == "Yes")
 total_rehab = rehab_with_contingency(sub_total)
 contingency = total_rehab - sub_total
@@ -209,6 +228,27 @@ c1.metric("Subtotal", f"${sub_total:,.0f}")
 c2.metric("Contingency", f"${contingency:,.0f}",
           help="10% if subtotal > $50k, otherwise $5,000")
 c3.metric("Total Rehab", f"${total_rehab:,.0f}")
+
+# Line-item breakdown — shows each included item with its computed amount
+items = rehab_breakdown(st.session_state.rehab, sqft, baths, pool == "Yes")
+if items:
+    with st.expander("📋 Rehab line items (click to expand)", expanded=True):
+        for label, amount in items:
+            cA, cB = st.columns([4, 1])
+            cA.write(f"• {label}")
+            cB.write(f"**${amount:,.0f}**")
+        st.markdown("---")
+        cA, cB = st.columns([4, 1])
+        cA.write("**Subtotal**")
+        cB.write(f"**${sub_total:,.0f}**")
+        cA, cB = st.columns([4, 1])
+        cA.write(f"Contingency ({'10%' if sub_total > 50000 else '$5,000 flat'})")
+        cB.write(f"${contingency:,.0f}")
+        cA, cB = st.columns([4, 1])
+        cA.write("**TOTAL REHAB**")
+        cB.write(f"**${total_rehab:,.0f}**")
+else:
+    items = []
 
 # ============================================================================
 # 4. SELLER & LOAN INFO
@@ -381,9 +421,9 @@ if c1.button("Save deal to history", type="primary", use_container_width=True):
         deal_id = save_deal(inputs_dict, rec, user_email=user.get("email"))
         st.success(f"Deal #{deal_id} saved.")
 
-# Word memo
+# Word memo (with rehab line items)
 try:
-    word_bytes = build_word_memo(property_dict, rec, seller_dict)
+    word_bytes = build_word_memo(property_dict, rec, seller_dict, rehab_items=items)
     c2.download_button(
         "Download Word memo", word_bytes,
         file_name=f"Exodus_Memo_{(address or 'deal').replace(' ','_')}.docx",
@@ -393,9 +433,9 @@ try:
 except Exception as e:
     c2.error(f"Word error: {e}")
 
-# PDF memo
+# PDF memo (with rehab line items)
 try:
-    pdf_bytes = build_pdf_memo(property_dict, rec, seller_dict)
+    pdf_bytes = build_pdf_memo(property_dict, rec, seller_dict, rehab_items=items)
     c3.download_button(
         "Download PDF memo", pdf_bytes,
         file_name=f"Exodus_Memo_{(address or 'deal').replace(' ','_')}.pdf",

@@ -30,7 +30,7 @@ def fmt_pct(x):
 # ---------------------------------------------------------------------------
 # WORD (.docx) generation
 # ---------------------------------------------------------------------------
-def build_word_memo(prop: Dict, rec: Dict, seller: Dict) -> bytes:
+def build_word_memo(prop: Dict, rec: Dict, seller: Dict, rehab_items: List = None) -> bytes:
     from docx import Document
     from docx.shared import Pt, RGBColor, Inches, Cm
     from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -112,6 +112,18 @@ def build_word_memo(prop: Dict, rec: Dict, seller: Dict) -> bytes:
         ("Wholesale Offer", fmt_money(rec.get("wholesale_offer", 0))),
         ("Deal Status", rec.get("deal_status", "—")),
     ])
+
+    # === REHAB LINE ITEMS ===
+    if rehab_items:
+        _add_section(doc, "Rehab Line Items")
+        rehab_rows = [(label, fmt_money(amount)) for label, amount in rehab_items]
+        sub = sum(a for _, a in rehab_items)
+        contingency_amt = rec.get("rehab_total", 0) - sub
+        rehab_rows.append(("Subtotal", fmt_money(sub)))
+        rehab_rows.append((f"Contingency ({'10%' if sub > 50000 else '$5,000 flat'})",
+                           fmt_money(contingency_amt)))
+        rehab_rows.append(("TOTAL REHAB", fmt_money(rec.get("rehab_total", 0))))
+        _add_kv_table(doc, rehab_rows)
 
     # === GAP ANALYSIS ===
     _add_section(doc, "Asking-MAO Gap")
@@ -221,7 +233,7 @@ def _add_kv_table(doc, rows: List):
 # ---------------------------------------------------------------------------
 # PDF generation (ReportLab — pure Python, no system deps)
 # ---------------------------------------------------------------------------
-def build_pdf_memo(prop: Dict, rec: Dict, seller: Dict) -> bytes:
+def build_pdf_memo(prop: Dict, rec: Dict, seller: Dict, rehab_items: List = None) -> bytes:
     from reportlab.lib.pagesizes import LETTER
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.units import inch
@@ -309,6 +321,18 @@ def build_pdf_memo(prop: Dict, rec: Dict, seller: Dict) -> bytes:
         ("Wholesale Offer", fmt_money(rec.get("wholesale_offer", 0))),
         ("Deal Status", rec.get("deal_status", "—")),
     ]))
+
+    # Rehab Line Items
+    if rehab_items:
+        story.append(Paragraph("Rehab Line Items", section_s))
+        rehab_rows = [(label, fmt_money(amount)) for label, amount in rehab_items]
+        sub = sum(a for _, a in rehab_items)
+        contingency_amt = rec.get("rehab_total", 0) - sub
+        rehab_rows.append(("Subtotal", fmt_money(sub)))
+        rehab_rows.append((f"Contingency ({'10%' if sub > 50000 else '$5,000 flat'})",
+                           fmt_money(contingency_amt)))
+        rehab_rows.append(("<b>TOTAL REHAB</b>", f"<b>{fmt_money(rec.get('rehab_total', 0))}</b>"))
+        story.append(kv_table(rehab_rows))
 
     # Gap
     story.append(Paragraph("Asking-MAO Gap", section_s))

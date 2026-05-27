@@ -1,11 +1,14 @@
-"""Comp import — parse MLS exports (CSV/Excel) into structured comp records.
+"""Comp import — parse MLS exports (CSV/Excel/PDF) into structured comp records.
 
-This is a port/adaptation of the standalone comp_import.py script for use
-in the Streamlit app. It reads from a file-like object (so it works with
-Streamlit's file_uploader directly) and returns a list of comp dicts.
+Supports three input formats:
+  - CSV (from Matrix, Flexmls, etc.)
+  - Excel (.xlsx, .xls, .xlsm)
+  - PDF (Comparable Sales Reports from data providers like PropStream)
+
+Returns a list of comp dicts with normalized keys.
 """
 import re, csv, io
-from typing import Optional, List, Dict, Any, BinaryIO
+from typing import Optional, List, Dict, Any
 
 
 COLUMN_PATTERNS = {
@@ -57,6 +60,17 @@ def _parse_int(v):
     return int(n) if n is not None else None
 
 
+def _parse_first_int(v):
+    """Extract the FIRST integer from a string. Handles 'X,XXX Δ -YYY' format."""
+    if v is None or v == "": return None
+    if isinstance(v, int): return v
+    if isinstance(v, float): return int(v)
+    m = re.search(r"[\d,]+", str(v))
+    if not m: return None
+    try: return int(m.group(0).replace(",", ""))
+    except ValueError: return None
+
+
 def _read_csv_bytes(data: bytes) -> List[List]:
     text = data.decode("utf-8-sig", errors="replace")
     try:
@@ -73,16 +87,184 @@ def _read_excel_bytes(data: bytes) -> List[List]:
     return [list(row) for row in ws.iter_rows(values_only=True)]
 
 
+# ============================================================================
+# PDF PARSER — coordinate-based, handles column-tabular CMA reports
+# ============================================================================
+def _cluster_x_positions(xs, tolerance=60):
+    if not xs:
+        return []
+    sorted_xs = sorted(set(xs))
+    clusters = [[sorted_xs[0]]]
+    for x in sorted_xs[1:]:
+        if x - clusters[-1][-1] <= tolerance:
+            clusters[-1].append(x)
+        else:
+            clusters.append([x])
+    return [sum(c) / len(c) for c in clusters]
+
+
+def _assign_to_column(x, column_anchors, max_extent=120):
+    """Return index of column whose anchor is just to the left of x."""
+    if not column_anchors:
+        return None
+    if x < column_anchors[0] - 10:
+        return None
+    for i in range(len(column_anchors) - 1):
+        if column_anchors[i] - 10 <= x < column_anchors[i+1] - 10:
+            return i
+    last = column_anchors[-1]
+    if x >= last - 10 and x < last + max_extent:
+        return len(column_anchors) - 1
+    return None
+
+
+def _parse_pdf_comps(data: bytes) -> List[Dict[str, Any]]:
+    """Parse a Comparable Sales Report style PDF (from PropStream and similar)."""
+    import pdfplumber
+    all_comps = []
+    with pdfplumber.open(io.BytesIO(data)) as pdf:
+        for page in pdf.pages:
+            text = page.extract_text() or ""
+            if "Comparable List" not in text and "Comparable Sales Report" not in text:
+                continue
+            words = page.extract_words(use_text_flow=True)
+            if not words:
+                continue
+
+            from collections import defaultdict
+            rows = defaultdict(list)
+            for w in words:
+                key = round(w["top"] / 5) * 5
+                rows[key].append(w)
+
+            candidate_xs = []
+            for y in sorted(rows):
+                line_words = sorted(rows[y], key=lambda w: w["x0"])
+                if not line_words: continue
+                first_text = line_words[0]["text"]
+                if first_text in ("Bed", "Bath", "Stories", "AVM"):
+                    for w in line_words[1:]:
+                        candidate_xs.append(w["x0"])
+
+            if not candidate_xs:
+                continue
+
+            column_centers = _cluster_x_positions(candidate_xs, tolerance=60)
+            if len(column_centers) < 2:
+                continue
+
+            fields = defaultdict(lambda: defaultdict(list))
+            current_field = None
+            for y in sorted(rows):
+                line_words = sorted(rows[y], key=lambda w: w["x0"])
+                if not line_words: continue
+                first_word = line_words[0]
+                first_text = first_word["text"]
+                first_x = first_word["x0"]
+
+                if first_x < column_centers[0] - 20:
+                    label_words = []
+                    value_words = []
+                    for w in line_words:
+                        if w["x0"] < column_centers[0] - 20:
+                            label_words.append(w["text"])
+                        else:
+                            value_words.append(w)
+                    label = " ".join(label_words).strip()
+                    current_field = label
+                    for w in value_words:
+                        col = _assign_to_column(w["x0"], column_centers)
+                        if col is not None:
+                            fields[current_field][col].append(w["text"])
+                else:
+                    if current_field:
+                        for w in line_words:
+                            col = _assign_to_column(w["x0"], column_centers)
+                            if col is not None:
+                                fields[current_field][col].append(w["text"])
+
+            num_comps = len(column_centers) - 1
+            for comp_idx in range(num_comps):
+                col = comp_idx + 1
+                def get(field_name):
+                    tokens = fields.get(field_name, {}).get(col, [])
+                    return " ".join(tokens).strip() if tokens else None
+
+                last_sold = get("Last Sold")
+                price = None
+                date = None
+                if last_sold:
+                    m = re.search(r"\$[\d,]+", last_sold)
+                    if m: price = _parse_money(m.group())
+                    m = re.search(r"\d{1,2}/\d{1,2}/\d{4}", last_sold)
+                    if m: date = m.group()
+
+                sqft = _parse_first_int(get("Square Feet"))
+                beds = _parse_first_int(get("Bed"))
+                baths = get("Bath")
+                year = _parse_int(get("Year Built"))
+                listing_status = get("Listing Status")
+
+                if price is None:
+                    continue
+
+                comp = {
+                    "address": None, "city": None, "state": None, "zip": None,
+                    "beds": beds, "baths": baths, "sqft": sqft, "year": year,
+                    "sold_price": price, "sold_date": date,
+                    "distance": None, "notes": listing_status or "",
+                    "dollar_per_sqft": (price / sqft) if (price and sqft) else None,
+                }
+                all_comps.append((col, comp))
+
+            # Extract addresses from rows above "Bed"
+            sorted_ys = sorted(rows)
+            bed_y = None
+            for y in sorted_ys:
+                texts = [w["text"] for w in rows[y]]
+                if "Bed" in texts:
+                    bed_y = y; break
+
+            if bed_y is not None:
+                addr_rows = []
+                for y in sorted_ys:
+                    if y >= bed_y: continue
+                    texts = [w["text"] for w in rows[y]]
+                    if any(t in ("Subject", "Property", "Comparable", "List") for t in texts):
+                        continue
+                    addr_rows.append(y)
+                addr_rows = addr_rows[-4:] if len(addr_rows) > 4 else addr_rows
+
+                addr_by_col = defaultdict(list)
+                for y in addr_rows:
+                    for w in sorted(rows[y], key=lambda w: w["x0"]):
+                        col = _assign_to_column(w["x0"], column_centers)
+                        if col is not None and col >= 1:
+                            addr_by_col[col].append(w["text"])
+
+                for col, addr_tokens in addr_by_col.items():
+                    full = " ".join(addr_tokens)
+                    zip_matches = re.findall(r"\b(\d{5})\b", full)
+                    zip_code = zip_matches[-1] if zip_matches else None
+                    state_code = None
+                    state_pattern = (r"\b(FL|GA|NC|SC|TX|CA|NY|NJ|PA|VA|MD|MA|TN|OH|"
+                                     r"MI|IL|IN|KY|AL|AR|LA|MS|MO|OK|KS|CO|UT|AZ|NV|"
+                                     r"OR|WA|WI|MN|IA|NE|SD|ND|MT|WY|ID|NM|HI|AK|ME|"
+                                     r"VT|NH|RI|CT|DE|WV)\b\s+\d{5}\b")
+                    sm = re.search(state_pattern, full, re.I)
+                    if sm: state_code = sm.group(1).upper()
+                    for c2, comp in all_comps:
+                        if c2 == col and comp.get("address") is None:
+                            comp["address"] = full
+                            comp["zip"] = zip_code
+                            comp["state"] = state_code
+                            break
+
+    return [c for _, c in all_comps]
+
+
 def parse_comp_file(file_obj_or_bytes, filename: str = "") -> List[Dict[str, Any]]:
-    """Parse a comp file into a list of comp dicts.
-
-    file_obj_or_bytes: a Streamlit UploadedFile, bytes, or file-like object
-    filename: used to detect file type if extension hint isn't obvious
-
-    Returns list of dicts with keys: address, city, state, zip, beds, baths,
-    sqft, year, sold_price, sold_date, distance, notes, dollar_per_sqft
-    """
-    # Get bytes
+    """Parse a comp file into a list of comp dicts. Accepts CSV, Excel, or PDF."""
     if hasattr(file_obj_or_bytes, "read"):
         data = file_obj_or_bytes.read()
         if hasattr(file_obj_or_bytes, "name"):
@@ -92,16 +274,19 @@ def parse_comp_file(file_obj_or_bytes, filename: str = "") -> List[Dict[str, Any
     else:
         raise ValueError("Pass a file-like object or bytes.")
 
-    # Detect format from extension or content
     lower_name = filename.lower()
+    is_pdf = lower_name.endswith(".pdf") or data[:4] == b"%PDF"
     is_excel = (lower_name.endswith(".xlsx") or lower_name.endswith(".xls")
-                or lower_name.endswith(".xlsm"))
-    if not lower_name and data[:4] == b'PK\x03\x04':
-        is_excel = True  # zip signature → assume xlsx
+                or lower_name.endswith(".xlsm") or
+                (not is_pdf and data[:4] == b"PK\x03\x04"))
 
-    rows = _read_excel_bytes(data) if is_excel else _read_csv_bytes(data)
+    if is_pdf:
+        return _parse_pdf_comps(data)
+    if is_excel:
+        rows = _read_excel_bytes(data)
+    else:
+        rows = _read_csv_bytes(data)
 
-    # Find header row
     header_idx = None
     for i, row in enumerate(rows[:10]):
         non_empty = sum(1 for v in row if v not in (None, ""))
@@ -120,7 +305,6 @@ def parse_comp_file(file_obj_or_bytes, filename: str = "") -> List[Dict[str, Any
     comps = []
     for row in rows[header_idx + 1:]:
         if all(v in (None, "") for v in row): continue
-
         def g(field, parser=None):
             i = cols.get(field)
             if i is None or i >= len(row): return None
@@ -138,28 +322,21 @@ def parse_comp_file(file_obj_or_bytes, filename: str = "") -> List[Dict[str, Any
         }
         if not comp["address"] or comp["sold_price"] is None: continue
         comp["dollar_per_sqft"] = (comp["sold_price"] / comp["sqft"]) if comp["sqft"] else None
-        # Convert sold_date if it's a datetime
         comps.append(comp)
     return comps
 
 
 def suggested_arv(comps: List[Dict[str, Any]], subject_sqft: Optional[int] = None) -> Dict[str, float]:
-    """Compute the 4 ARV estimates + the suggested ARV (average of non-zero methods)."""
     selected = [c for c in comps if c.get("sold_price")]
     if not selected:
-        return {
-            "avg_sale": 0, "median_sale": 0,
-            "avg_psf_times_sqft": 0, "median_psf_times_sqft": 0,
-            "suggested": 0,
-        }
+        return {"avg_sale": 0, "median_sale": 0, "avg_psf_times_sqft": 0,
+                "median_psf_times_sqft": 0, "suggested": 0}
     prices = [c["sold_price"] for c in selected]
     psf = [c["dollar_per_sqft"] for c in selected if c.get("dollar_per_sqft")]
-
     avg_sale = sum(prices) / len(prices)
     sorted_p = sorted(prices)
     median_sale = (sorted_p[len(sorted_p)//2] if len(sorted_p) % 2
                    else (sorted_p[len(sorted_p)//2 - 1] + sorted_p[len(sorted_p)//2]) / 2)
-
     if psf and subject_sqft:
         avg_psf = sum(psf) / len(psf)
         sorted_psf = sorted(psf)
@@ -170,13 +347,9 @@ def suggested_arv(comps: List[Dict[str, Any]], subject_sqft: Optional[int] = Non
     else:
         avg_psf_times_sqft = 0
         median_psf_times_sqft = 0
-
     methods = [v for v in (avg_sale, median_sale, avg_psf_times_sqft, median_psf_times_sqft) if v > 0]
     suggested = sum(methods) / len(methods) if methods else 0
-
-    return {
-        "avg_sale": avg_sale, "median_sale": median_sale,
-        "avg_psf_times_sqft": avg_psf_times_sqft,
-        "median_psf_times_sqft": median_psf_times_sqft,
-        "suggested": suggested,
-    }
+    return {"avg_sale": avg_sale, "median_sale": median_sale,
+            "avg_psf_times_sqft": avg_psf_times_sqft,
+            "median_psf_times_sqft": median_psf_times_sqft,
+            "suggested": suggested}

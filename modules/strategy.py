@@ -253,6 +253,101 @@ def rehab_with_contingency(subtotal: float) -> float:
     return subtotal + contingency
 
 
+def rehab_breakdown(rehab: Dict[str, Any], sqft: int, baths: float, pool: bool) -> List[tuple]:
+    """Return a list of (item_name, amount) for each included rehab line item.
+    Items not included (toggle=No) are omitted.
+    """
+    r = REPAIR_RATES
+    items = []
+    def get(key): return rehab.get(key, {}) or {}
+
+    roof = get("roof")
+    if roof.get("include"):
+        t = roof.get("type", "Shingle")
+        rate = {"Flat": r["roof_flat_per_sqft"], "Shingle": r["roof_shingle_per_sqft"],
+                "Tile": r["roof_tile_per_sqft"]}.get(t, r["roof_shingle_per_sqft"])
+        items.append((f"Roof ({t}, {sqft:,} sf × ${rate}/sf)", sqft * rate))
+
+    el = get("electrical")
+    if el.get("include"):
+        t = el.get("type", "Standard misc work")
+        amt = {"Standard misc work": r["electrical_standard_misc"],
+               "Replace Breaker Box": r["electrical_breaker_box"],
+               "Full (panel + misc)": r["electrical_full"]}.get(t, r["electrical_standard_misc"])
+        items.append((f"Electrical ({t})", amt))
+
+    if get("ac").get("include"):
+        tons = math.ceil(sqft / 500) if sqft > 0 else 0
+        items.append((f"A/C ({tons} ton{'s' if tons != 1 else ''} × ${r['ac_per_ton']:,})",
+                      tons * r["ac_per_ton"]))
+
+    if get("kitchen").get("include"):
+        items.append(("Kitchen (full remodel)", r["kitchen_full_remodel"]))
+
+    if get("bathrooms").get("include"):
+        items.append((f"Bathrooms ({baths:g} bath{'s' if baths != 1 else ''} × ${r['bathroom_full_remodel']:,})",
+                      baths * r["bathroom_full_remodel"]))
+
+    ip = get("interior_paint")
+    if ip.get("include"):
+        t = ip.get("type", "Knockdown + Paint")
+        rate = {"Knockdown + Paint": r["interior_paint_full_per_sqft"],
+                "Paint only": r["interior_paint_paint_only_per_sqft"],
+                "Knockdown only": r["interior_paint_texture_per_sqft"]}.get(t, r["interior_paint_full_per_sqft"])
+        items.append((f"Interior Paint ({t}, {sqft:,} sf × ${rate}/sf)", sqft * rate))
+
+    if get("exterior_paint").get("include"):
+        items.append((f"Exterior Paint ({sqft:,} sf × ${r['exterior_paint_per_sqft']}/sf)",
+                      sqft * r["exterior_paint_per_sqft"]))
+
+    if get("flooring").get("include"):
+        items.append((f"Flooring (luxury vinyl, {sqft:,} sf × ${r['flooring_luxury_vinyl_per_sqft']}/sf)",
+                      sqft * r["flooring_luxury_vinyl_per_sqft"]))
+
+    doors = get("doors")
+    if doors.get("include"):
+        qty = doors.get("qty", 0) or 0
+        t = doors.get("type", "Interior Replace")
+        rate = {"Exterior Replace": r["door_exterior_each"],
+                "Interior Replace": r["door_interior_each"],
+                "Patch & Paint": r["door_patch_paint_each"]}.get(t, r["door_interior_each"])
+        items.append((f"Doors ({qty} × {t} @ ${rate})", qty * rate))
+
+    win = get("windows")
+    if win.get("include"):
+        qty = win.get("qty", 0) or 0
+        t = win.get("type", "Non-Impact")
+        rate = {"Non-Impact": r["window_non_impact_each"], "Impact": r["window_impact_each"],
+                "New Shutter": r["shutter_new_each"], "Replace Shutter": r["shutter_replace_each"]}.get(t, r["window_non_impact_each"])
+        items.append((f"Windows/Shutters ({qty} × {t} @ ${rate})", qty * rate))
+
+    plumb = get("plumbing")
+    if plumb.get("include"):
+        items.append(("Plumbing (manual)", plumb.get("amount", 0) or 0))
+
+    if get("landscaping").get("include"):
+        items.append(("Landscaping", r["landscaping"]))
+
+    if get("appliances").get("include"):
+        items.append(("Appliances", r["appliances"]))
+
+    pool_r = get("pool")
+    if pool_r.get("include") and pool:
+        t = pool_r.get("type", "Replace Motor")
+        amt = {"Replace Motor": r["pool_replace_motor"], "Replace Pump": r["pool_replace_pump"],
+               "Heater": r["pool_heater"], "Waterline Tile": r["pool_waterline_tile"],
+               "Diamond Brite": r["pool_diamond_brite"]}.get(t, r["pool_replace_motor"])
+        items.append((f"Pool ({t})", amt))
+
+    for key in ("other_1", "other_2"):
+        o = get(key)
+        if o.get("include"):
+            items.append((o.get("description") or key.replace("_", " ").title(),
+                          o.get("amount", 0) or 0))
+
+    return items
+
+
 # ============================================================================
 # HOLDING COSTS
 # ============================================================================
