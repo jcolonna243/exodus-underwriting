@@ -67,9 +67,9 @@ if do_lookup:
                 if v not in (None, 0, "", "0"):
                     st.session_state[field] = v
                     updated.append(field)
-            # Also normalize the address line if RentCast returned a cleaner version
-            if result.get("address"):
-                st.session_state["address"] = result["address"]
+            # Note: we don't auto-update the address field itself because Streamlit
+            # disallows modifying a widget's session_state after it has rendered
+            # this run. The user's typed address is preserved.
             loc = (f"{result.get('city', '')}, {result.get('state', '')} "
                    f"{result.get('zip', '')}").strip().strip(",").strip()
             st.success(
