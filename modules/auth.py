@@ -40,7 +40,10 @@ def require_login():
 
     # If user is not logged in, show login button
     if not getattr(st, "user", None) or not st.user.is_logged_in:
-        st.title("🏠 Exodus Property Solutions")
+      # Centered brand logo on the login screen
+        _l, _c, _r = st.columns([1, 2, 1])
+        with _c:
+            st.image("assets/sell_to_exodus.png", use_container_width=True)
         st.subheader("Acquisitions Underwriting Tool")
         st.markdown("---")
         st.write("Sign in with your team Google account to continue.")
