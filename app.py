@@ -1,4 +1,4 @@
-"""Exodus Property Solutions — Acquisitions Underwriting Tool (web).
+"""Sell to Exodus — Acquisitions Underwriting Tool (web).
 
 Run locally:
     streamlit run app.py
@@ -9,9 +9,11 @@ import streamlit as st
 from modules.auth import require_login, sidebar_account_widget
 from modules.db import list_deals, init_db
 
+LOGO_PATH = "assets/sell_to_exodus.png"
+
 st.set_page_config(
-    page_title="Exodus Underwriting",
-    page_icon="🏠",
+    page_title="Sell to Exodus — Underwriting",
+    page_icon=LOGO_PATH,
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -21,7 +23,11 @@ sidebar_account_widget()
 init_db()
 
 # === HOME ===
-st.title("🏠 Exodus Property Solutions")
+# Centered brand logo
+_l, _c, _r = st.columns([1, 3, 1])
+with _c:
+    st.image(LOGO_PATH, use_container_width=True)
+
 st.subheader("Acquisitions Underwriting Tool")
 
 st.markdown("""
