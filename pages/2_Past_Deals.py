@@ -2,8 +2,10 @@
 import streamlit as st
 import pandas as pd
 from modules.auth import require_login, sidebar_account_widget
-from modules.db import list_deals, get_deal, delete_deal, distinct_strategies
+from modules.db import (list_deals, get_deal, delete_deal, distinct_strategies,
+                        load_chat_messages, save_chat_message)
 from modules.memo import build_word_memo, build_pdf_memo
+from modules import chat as chat_mod
 
 st.set_page_config(page_title="Past Deals", page_icon="📚", layout="wide")
 user = require_login()
@@ -105,3 +107,46 @@ if selected_id > 0:
 
         with st.expander("Show full inputs/outputs (JSON)"):
             st.json({"inputs": inputs, "outputs": outputs})
+
+        # === CHAT — saved conversation about this deal ===
+        st.markdown("---")
+        with st.expander("💬 Brainstorm with Claude about this deal", expanded=True):
+            if not chat_mod.is_configured():
+                st.warning("Chat not configured — add Anthropic API key in Streamlit Secrets.")
+            else:
+                # Load saved chat from DB
+                saved_messages = load_chat_messages(int(selected_id))
+
+                # Render saved messages
+                for msg in saved_messages:
+                    with st.chat_message(msg["role"]):
+                        st.markdown(msg["content"])
+
+                # Allow continuing the conversation
+                user_input = st.chat_input(
+                    "Continue the conversation...",
+                    key=f"chat_input_deal_{selected_id}",
+                )
+                if user_input:
+                    # Save user message immediately
+                    save_chat_message(int(selected_id), "user", user_input)
+                    with st.chat_message("user"):
+                        st.markdown(user_input)
+
+                    # Stream Claude's response
+                    with st.chat_message("assistant"):
+                        placeholder = st.empty()
+                        full_response = ""
+                        try:
+                            system_prompt = chat_mod.build_system_prompt(
+                                prop, outputs, seller, rehab_items=None
+                            )
+                            history = [{"role": m["role"], "content": m["content"]}
+                                       for m in saved_messages]
+                            for chunk in chat_mod.stream_response(system_prompt, history, user_input):
+                                full_response += chunk
+                                placeholder.markdown(full_response + " ▌")
+                            placeholder.markdown(full_response)
+                            save_chat_message(int(selected_id), "assistant", full_response)
+                        except Exception as e:
+                            placeholder.error(f"Chat error: {e}")

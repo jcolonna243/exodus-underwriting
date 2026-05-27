@@ -39,6 +39,51 @@ def init_db():
                 outputs_json TEXT NOT NULL
             )
         """)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS chat_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                deal_id INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                FOREIGN KEY (deal_id) REFERENCES deals(id) ON DELETE CASCADE
+            )
+        """)
+
+
+def save_chat_message(deal_id: int, role: str, content: str) -> int:
+    """Save a single chat message (role: 'user' or 'assistant')."""
+    init_db()
+    with _conn() as c:
+        cur = c.execute("""
+            INSERT INTO chat_messages (deal_id, created_at, role, content)
+            VALUES (?, ?, ?, ?)
+        """, (deal_id, datetime.utcnow().isoformat(), role, content))
+        return cur.lastrowid
+
+
+def load_chat_messages(deal_id: int) -> List[Dict[str, Any]]:
+    """Load all chat messages for a deal, in chronological order."""
+    init_db()
+    with _conn() as c:
+        rows = c.execute("""
+            SELECT id, created_at, role, content FROM chat_messages
+            WHERE deal_id = ? ORDER BY id ASC
+        """, (deal_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def save_chat_bulk(deal_id: int, messages: List[Dict[str, str]]):
+    """Save a list of {role, content} messages for a deal (bulk insert)."""
+    if not messages:
+        return
+    init_db()
+    now = datetime.utcnow().isoformat()
+    with _conn() as c:
+        c.executemany("""
+            INSERT INTO chat_messages (deal_id, created_at, role, content)
+            VALUES (?, ?, ?, ?)
+        """, [(deal_id, now, m["role"], m["content"]) for m in messages])
 
 
 def save_deal(inputs: Dict[str, Any], outputs: Dict[str, Any],

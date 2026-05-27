@@ -18,7 +18,8 @@ from modules.strategy import (compute_recommendation, DEFAULTS,
                               rehab_breakdown)
 from modules.comp_import import parse_comp_file, suggested_arv
 from modules.memo import build_word_memo, build_pdf_memo
-from modules.db import save_deal
+from modules.db import save_deal, save_chat_bulk
+from modules import chat as chat_mod
 
 st.set_page_config(page_title="New Deal", page_icon="📝", layout="wide")
 user = require_login()
@@ -419,7 +420,14 @@ if c1.button("Save deal to history", type="primary", use_container_width=True):
         st.error("Enter an address before saving.")
     else:
         deal_id = save_deal(inputs_dict, rec, user_email=user.get("email"))
-        st.success(f"Deal #{deal_id} saved.")
+        # Also save any chat messages from this session
+        chat_history = st.session_state.get("chat_history", [])
+        if chat_history:
+            save_chat_bulk(deal_id, chat_history)
+        st.success(
+            f"Deal #{deal_id} saved." +
+            (f" Chat history ({len(chat_history)} messages) preserved." if chat_history else "")
+        )
 
 # Word memo (with rehab line items)
 try:
@@ -449,3 +457,75 @@ if c4.button("Reset form", use_container_width=True):
     for k in list(st.session_state.keys()):
         del st.session_state[k]
     st.rerun()
+
+# ============================================================================
+# 💬 BRAINSTORM WITH CLAUDE
+# ============================================================================
+st.markdown("---")
+with st.expander("💬 Brainstorm with Claude about this deal", expanded=False):
+    if not chat_mod.is_configured():
+        st.warning(
+            "Chat not configured. Add your Anthropic API key in "
+            "**Streamlit Cloud → Settings → Secrets**:\n\n"
+            "```toml\n[anthropic]\napi_key = \"sk-ant-...\"\n```"
+        )
+    else:
+        # Initialize chat history in session state
+        if "chat_history" not in st.session_state:
+            st.session_state.chat_history = []
+
+        st.caption(
+            "Claude has the full deal context loaded — property, comps, ARV, rehab, "
+            "recommendation, all of it. Ask anything. Chat is preserved when you save the deal."
+        )
+
+        # Suggested prompts (only show before first message)
+        if not st.session_state.chat_history:
+            st.write("**Try a starter prompt:**")
+            cols = st.columns(2)
+            for i, prompt in enumerate(chat_mod.get_suggested_prompts(property_dict)):
+                if cols[i % 2].button(prompt, key=f"suggested_{i}", use_container_width=True):
+                    st.session_state.chat_history.append({"role": "user", "content": prompt})
+                    st.session_state._chat_pending = prompt
+                    st.rerun()
+
+        # Display chat history
+        for msg in st.session_state.chat_history:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+
+        # Process pending message (from suggested-prompt button) and stream response
+        pending = st.session_state.pop("_chat_pending", None)
+        user_input = st.chat_input("Ask Claude about this deal...")
+
+        if pending or user_input:
+            new_msg = pending or user_input
+            if user_input and not pending:
+                st.session_state.chat_history.append({"role": "user", "content": new_msg})
+                with st.chat_message("user"):
+                    st.markdown(new_msg)
+            # Stream Claude's response
+            with st.chat_message("assistant"):
+                placeholder = st.empty()
+                full_response = ""
+                try:
+                    system_prompt = chat_mod.build_system_prompt(
+                        property_dict, rec, seller_dict, rehab_items=items
+                    )
+                    # History to send (excludes the message we just added)
+                    history_for_api = st.session_state.chat_history[:-1]
+                    for chunk in chat_mod.stream_response(system_prompt, history_for_api, new_msg):
+                        full_response += chunk
+                        placeholder.markdown(full_response + " ▌")
+                    placeholder.markdown(full_response)
+                    st.session_state.chat_history.append(
+                        {"role": "assistant", "content": full_response}
+                    )
+                except Exception as e:
+                    placeholder.error(f"Chat error: {e}")
+
+        # Clear chat button
+        if st.session_state.chat_history:
+            if st.button("🗑 Clear chat", key="clear_chat"):
+                st.session_state.chat_history = []
+                st.rerun()
