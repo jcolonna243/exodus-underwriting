@@ -134,8 +134,71 @@ def build_word_memo(prop: Dict, rec: Dict, seller: Dict, rehab_items: List = Non
         ("Est. MLS Commission", fmt_money(rec.get("mls_commission_estimate", 0))),
     ])
 
-    # === OFFER TERMS (skip for MLS/Pass) ===
+    # === FINANCIAL PRO-FORMA (for Rehab and Double Close strategies) ===
     strat = rec.get("strategy", "")
+    if strat == "Rehab" or "Double Close" in strat:
+        _add_section(doc, "Financial Pro-Forma")
+        if strat == "Rehab":
+            # Rehab pro-forma: full acquisition, rehab, hold, retail sale
+            proforma_rows = [
+                ("SALE SIDE (B→C)", ""),
+                ("  Expected Sale Price (ARV)", fmt_money(rec.get("arv", 0))),
+                (f"  Less: BC Closing Costs ({rec.get('sale_closing_pct', 0.07):.1%})",
+                 f"({fmt_money(rec.get('sale_closing_costs', 0))})"),
+                ("  Net Sale Proceeds",
+                 fmt_money(rec.get("arv", 0) - rec.get("sale_closing_costs", 0))),
+                ("", ""),
+                ("ACQUISITION & PROJECT (A→B + Hold)", ""),
+                ("  Purchase Price (Cash Offer)", fmt_money(rec.get("cash_offer", 0))),
+                (f"  Plus: AB Closing Costs ({rec.get('purchase_closing_pct', 0.04):.1%})",
+                 fmt_money(rec.get("purchase_closing_costs", 0))),
+                ("  Plus: Total Rehab", fmt_money(rec.get("rehab_total", 0))),
+                (f"  Plus: Holding Costs ({rec.get('loan_duration_months', 6)} mo × "
+                 f"{fmt_money(rec.get('monthly_holding', 0))}/mo)",
+                 fmt_money(rec.get("total_holding", 0))),
+                (f"  Plus: Cost of Money ({rec.get('ltv', 0.9):.0%} LTV @ "
+                 f"{rec.get('interest_rate', 0.11):.1%} + {rec.get('points', 0.015):.1%} pts)",
+                 fmt_money(rec.get("cost_of_money", 0))),
+                ("  Total Project Cost", fmt_money(rec.get("total_project_cost", 0))),
+                ("", ""),
+                ("BOTTOM LINE", ""),
+                ("  Net Profit", fmt_money(rec.get("net_profit", 0))),
+                ("  Projected ROI", fmt_pct(rec.get("roi", 0))),
+            ]
+        else:
+            # Double Close pro-forma: same-day A→B and B→C
+            buy_price = rec.get("wholesale_offer", 0)
+            sell_price = rec.get("cash_offer", 0)
+            assignment_fee = rec.get("target_assignment_fee") or (sell_price - buy_price)
+            ab_closing_dc = buy_price * 0.02      # reduced on same-day close
+            bc_closing_dc = sell_price * 0.01     # minimal, same-day
+            transactional_fee = buy_price * 0.01  # 1-day bridge funding
+            total_dc_costs = ab_closing_dc + bc_closing_dc + transactional_fee
+            dc_net = assignment_fee - total_dc_costs
+            proforma_rows = [
+                ("SELL SIDE (B→C, same day)", ""),
+                ("  End-Buyer Price", fmt_money(sell_price)),
+                ("  Less: BC Closing Costs (~1%, same-day discount)",
+                 f"({fmt_money(bc_closing_dc)})"),
+                ("  Net from End Buyer", fmt_money(sell_price - bc_closing_dc)),
+                ("", ""),
+                ("BUY SIDE (A→B)", ""),
+                ("  Your Contract Price (to Seller)", fmt_money(buy_price)),
+                ("  Plus: AB Closing Costs (~2%, same-day)",
+                 fmt_money(ab_closing_dc)),
+                ("  Plus: Transactional Funding (~1%, 24-hr bridge)",
+                 fmt_money(transactional_fee)),
+                ("  Total Your Costs",
+                 fmt_money(buy_price + ab_closing_dc + transactional_fee)),
+                ("", ""),
+                ("BOTTOM LINE", ""),
+                ("  Gross Spread (B − A)", fmt_money(sell_price - buy_price)),
+                ("  Less: All Closing & Funding Costs", f"({fmt_money(total_dc_costs)})"),
+                ("  Net Profit (to You)", fmt_money(dc_net)),
+            ]
+        _add_kv_table(doc, proforma_rows)
+
+    # === OFFER TERMS (skip for MLS/Pass) ===
     if not (strat.startswith("Pass") or strat == "NO-GO — Pass" or strat == "MLS Referral"):
         _add_section(doc, "Offer Terms")
         rows = [
@@ -343,8 +406,65 @@ def build_pdf_memo(prop: Dict, rec: Dict, seller: Dict, rehab_items: List = None
         ("Est. MLS Commission", fmt_money(rec.get("mls_commission_estimate", 0))),
     ]))
 
-    # Offer Terms (conditional)
+    # Financial Pro-Forma (for Rehab and Double Close strategies)
     strat = rec.get("strategy", "")
+    if strat == "Rehab" or "Double Close" in strat:
+        story.append(Paragraph("Financial Pro-Forma", section_s))
+        if strat == "Rehab":
+            proforma_rows = [
+                ("<b>SALE SIDE (B→C)</b>", ""),
+                ("&nbsp;&nbsp;Expected Sale Price (ARV)", fmt_money(rec.get("arv", 0))),
+                (f"&nbsp;&nbsp;Less: BC Closing Costs ({rec.get('sale_closing_pct', 0.07):.1%})",
+                 f"({fmt_money(rec.get('sale_closing_costs', 0))})"),
+                ("&nbsp;&nbsp;Net Sale Proceeds",
+                 fmt_money(rec.get("arv", 0) - rec.get("sale_closing_costs", 0))),
+                ("<b>ACQUISITION &amp; PROJECT (A→B + Hold)</b>", ""),
+                ("&nbsp;&nbsp;Purchase Price (Cash Offer)", fmt_money(rec.get("cash_offer", 0))),
+                (f"&nbsp;&nbsp;Plus: AB Closing Costs ({rec.get('purchase_closing_pct', 0.04):.1%})",
+                 fmt_money(rec.get("purchase_closing_costs", 0))),
+                ("&nbsp;&nbsp;Plus: Total Rehab", fmt_money(rec.get("rehab_total", 0))),
+                (f"&nbsp;&nbsp;Plus: Holding Costs ({rec.get('loan_duration_months', 6)} mo × "
+                 f"{fmt_money(rec.get('monthly_holding', 0))}/mo)",
+                 fmt_money(rec.get("total_holding", 0))),
+                (f"&nbsp;&nbsp;Plus: Cost of Money ({rec.get('ltv', 0.9):.0%} LTV @ "
+                 f"{rec.get('interest_rate', 0.11):.1%} + {rec.get('points', 0.015):.1%} pts)",
+                 fmt_money(rec.get("cost_of_money", 0))),
+                ("&nbsp;&nbsp;Total Project Cost", fmt_money(rec.get("total_project_cost", 0))),
+                ("<b>BOTTOM LINE</b>", ""),
+                ("&nbsp;&nbsp;<b>Net Profit</b>", f"<b>{fmt_money(rec.get('net_profit', 0))}</b>"),
+                ("&nbsp;&nbsp;Projected ROI", fmt_pct(rec.get("roi", 0))),
+            ]
+        else:
+            buy_price = rec.get("wholesale_offer", 0)
+            sell_price = rec.get("cash_offer", 0)
+            assignment_fee = rec.get("target_assignment_fee") or (sell_price - buy_price)
+            ab_closing_dc = buy_price * 0.02
+            bc_closing_dc = sell_price * 0.01
+            transactional_fee = buy_price * 0.01
+            total_dc_costs = ab_closing_dc + bc_closing_dc + transactional_fee
+            dc_net = assignment_fee - total_dc_costs
+            proforma_rows = [
+                ("<b>SELL SIDE (B→C, same day)</b>", ""),
+                ("&nbsp;&nbsp;End-Buyer Price", fmt_money(sell_price)),
+                ("&nbsp;&nbsp;Less: BC Closing Costs (~1%, same-day discount)",
+                 f"({fmt_money(bc_closing_dc)})"),
+                ("&nbsp;&nbsp;Net from End Buyer", fmt_money(sell_price - bc_closing_dc)),
+                ("<b>BUY SIDE (A→B)</b>", ""),
+                ("&nbsp;&nbsp;Your Contract Price (to Seller)", fmt_money(buy_price)),
+                ("&nbsp;&nbsp;Plus: AB Closing Costs (~2%, same-day)",
+                 fmt_money(ab_closing_dc)),
+                ("&nbsp;&nbsp;Plus: Transactional Funding (~1%, 24-hr bridge)",
+                 fmt_money(transactional_fee)),
+                ("&nbsp;&nbsp;Total Your Costs",
+                 fmt_money(buy_price + ab_closing_dc + transactional_fee)),
+                ("<b>BOTTOM LINE</b>", ""),
+                ("&nbsp;&nbsp;Gross Spread (B − A)", fmt_money(sell_price - buy_price)),
+                ("&nbsp;&nbsp;Less: All Closing &amp; Funding Costs", f"({fmt_money(total_dc_costs)})"),
+                ("&nbsp;&nbsp;<b>Net Profit (to You)</b>", f"<b>{fmt_money(dc_net)}</b>"),
+            ]
+        story.append(kv_table(proforma_rows))
+
+    # Offer Terms (conditional)
     if not (strat.startswith("Pass") or strat == "NO-GO — Pass" or strat == "MLS Referral"):
         story.append(Paragraph("Offer Terms", section_s))
         offer_rows = [

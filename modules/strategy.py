@@ -1,4 +1,3 @@
-# v2 — rehab_breakdown added
 """Core strategy decision logic — ported from Exodus Underwriting Tool v3 Excel.
 
 This module is a pure-Python replica of every formula on the v3 spreadsheet.
@@ -859,6 +858,11 @@ def compute_recommendation(inputs: Dict[str, Any]) -> Dict[str, Any]:
         total_holding, params["purchase_closing_pct"], params["ltv"], com,
     )
 
+    # Individual cost components for pro-forma display
+    purchase_closing_costs = cash_offer * params["purchase_closing_pct"]
+    sale_closing_costs = arv * params["sale_closing_pct"]
+    cost_of_money_amount = params["ltv"] * cash_offer * com
+
     # Deal Status
     status, status_reason = deal_status(net_profit, roi, params)
 
@@ -963,6 +967,17 @@ def compute_recommendation(inputs: Dict[str, Any]) -> Dict[str, Any]:
         "deal_status": status,
         "deal_status_reason": status_reason,
         "mls_commission_estimate": mls_comm,
+
+        # Pro-forma line items
+        "purchase_closing_costs": purchase_closing_costs,
+        "sale_closing_costs": sale_closing_costs,
+        "cost_of_money": cost_of_money_amount,
+        "purchase_closing_pct": params["purchase_closing_pct"],
+        "sale_closing_pct": params["sale_closing_pct"],
+        "ltv": params["ltv"],
+        "loan_duration_months": params["loan_duration_months"],
+        "interest_rate": params["interest_rate"],
+        "points": params["points"],
 
         # Diagnostics
         "equity": equity,

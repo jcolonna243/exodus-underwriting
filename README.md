@@ -1,7 +1,7 @@
 # Exodus Underwriting — Web Application
 
 A web app that ports the v3 Excel underwriting tool to a browser-based interface
-your whole team can access. Built with Streamlit. Free to host.     
+your whole team can access. Built with Streamlit. Free to host.
 
 ## What it does
 
