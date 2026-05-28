@@ -425,19 +425,15 @@ if rec["action_items"]:
     for i, a in enumerate(rec["action_items"], 1):
         st.markdown(f"{i}. {a}")
 
-# Snapshot
+# Snapshot — Key Numbers vary by strategy
 st.markdown("### Key Numbers")
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("ARV", f"${rec['arv']:,.0f}")
-c2.metric("Total Rehab", f"${rec['rehab_total']:,.0f}")
-c3.metric("Net Profit", f"${rec['net_profit']:,.0f}")
-c4.metric("ROI", f"{rec['roi']:.1%}")
-
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Cash Offer", f"${rec['cash_offer']:,.0f}")
-c2.metric("Wholesale Offer", f"${rec['wholesale_offer']:,.0f}")
-c3.metric("Total Project Cost", f"${rec['total_project_cost']:,.0f}")
-c4.metric("Deal Status", rec["deal_status"])
+from modules.strategy import key_numbers_for
+metrics = key_numbers_for(rec, property_dict)
+# Render 4 per row, wrapping for shorter lists
+for i in range(0, len(metrics), 4):
+    cols = st.columns(4)
+    for j, (label, value) in enumerate(metrics[i:i + 4]):
+        cols[j].metric(label, value)
 
 # Diagnostics (collapsed)
 with st.expander("🔍 Diagnostics — decision logic flags"):
