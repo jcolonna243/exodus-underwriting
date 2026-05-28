@@ -89,20 +89,50 @@ def save_deal(inputs: Dict[str, Any], outputs: Dict[str, Any],
 
 def list_deals(limit: int = 200, search: Optional[str] = None,
                strategy_filter: Optional[str] = None) -> List[Dict[str, Any]]:
-    """List deals (newest first). Supports address search + strategy filter."""
-    c = get_client()
-    q = c.table("deals").select("*")
+    """List deals — bypasses supabase-py and calls the REST API directly.
+
+    We hit PGRST125 with supabase-py against the deals table even though the
+    same client works fine against the settings table. Until that's diagnosed,
+    we call the REST API ourselves so we can (a) see the actual HTTP error if
+    any, and (b) work around the library issue.
+    """
+    import json
+    import urllib.parse
+    import urllib.request
+    import urllib.error
+    import streamlit as st
+
+    base_url = st.secrets["supabase"]["url"].rstrip("/")
+    key = st.secrets["supabase"]["service_role_key"]
+
+    # Build query
+    params = {"select": "*"}
     if search:
-        q = q.ilike("address", f"%{search}%")
+        params["address"] = f"ilike.*{search}*"
     if strategy_filter and strategy_filter != "All":
-        q = q.eq("strategy", strategy_filter)
-    # Note: PostgREST .order()/.limit() chain returns PGRST125 against this
-    # Supabase project (likely a postgrest-py 2.x compatibility issue with
-    # Python 3.14). Sorting/limiting in Python until that's resolved.
-    res = q.execute()
-    rows = res.data or []
-    rows.sort(key=lambda r: r.get("id") or 0, reverse=True)
-    return rows[:limit]
+        params["strategy"] = f"eq.{strategy_filter}"
+    full_url = f"{base_url}/rest/v1/deals?{urllib.parse.urlencode(params)}"
+
+    req = urllib.request.Request(full_url, headers={
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Accept": "application/json",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        raise RuntimeError(
+            f"Supabase REST returned HTTP {e.code}.\n"
+            f"URL: {full_url}\n"
+            f"Body: {body[:800]}"
+        )
+
+    if not isinstance(data, list):
+        return []
+    data.sort(key=lambda r: r.get("id") or 0, reverse=True)
+    return data[:limit]
 
 
 def get_deal(deal_id: int) -> Optional[Dict[str, Any]]:
