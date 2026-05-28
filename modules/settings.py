@@ -58,7 +58,7 @@ def list_settings() -> dict:
         return {}
     try:
         c = get_client()
-        res = c.table("settings").select("key, value, updated_at, updated_by").execute()
+        res = c.table("settings").select("key,value,updated_at,updated_by").execute()
         return {r["key"]: r["value"] for r in (res.data or [])}
     except Exception:
         return {}
