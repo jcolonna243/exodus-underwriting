@@ -35,14 +35,19 @@ def save_chat_message(deal_id: int, role: str, content: str) -> int:
 
 
 def load_chat_messages(deal_id: int) -> List[Dict[str, Any]]:
-    """Load all chat messages for a deal, in chronological order."""
+    """Load all chat messages for a deal, in chronological order.
+
+    Note: PostgREST .order() chain returns PGRST125 against this Supabase
+    project. Fetching unordered and sorting in Python until that's resolved.
+    """
     c = get_client()
     res = (c.table("chat_messages")
             .select("*")
             .eq("deal_id", deal_id)
-            .order("id", desc=False)
             .execute())
-    return res.data or []
+    rows = res.data or []
+    rows.sort(key=lambda r: r.get("id") or 0)
+    return rows
 
 
 def save_chat_bulk(deal_id: int, messages: List[Dict[str, str]]):
@@ -86,13 +91,18 @@ def list_deals(limit: int = 200, search: Optional[str] = None,
                strategy_filter: Optional[str] = None) -> List[Dict[str, Any]]:
     """List deals (newest first). Supports address search + strategy filter."""
     c = get_client()
-   q = c.table("deals").select("*")
+    q = c.table("deals").select("*")
     if search:
         q = q.ilike("address", f"%{search}%")
     if strategy_filter and strategy_filter != "All":
         q = q.eq("strategy", strategy_filter)
-    res = q.order("id", desc=True).limit(limit).execute()
-    return res.data or []
+    # Note: PostgREST .order()/.limit() chain returns PGRST125 against this
+    # Supabase project (likely a postgrest-py 2.x compatibility issue with
+    # Python 3.14). Sorting/limiting in Python until that's resolved.
+    res = q.execute()
+    rows = res.data or []
+    rows.sort(key=lambda r: r.get("id") or 0, reverse=True)
+    return rows[:limit]
 
 
 def get_deal(deal_id: int) -> Optional[Dict[str, Any]]:
