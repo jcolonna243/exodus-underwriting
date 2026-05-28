@@ -60,7 +60,10 @@ DEFAULTS = {
 
 
 # ============================================================================
-# REPAIR RATE TABLE — mirror of Repair Rates tab
+# REPAIR RATE TABLE — mirror of Repair Rates tab.
+# Hardcoded values below are the fallback defaults. The admin page can override
+# any of these via modules/settings.py; the live values are returned by
+# get_repair_rates() and get_strategy_defaults().
 # ============================================================================
 REPAIR_RATES = {
     # Sqft-driven
@@ -104,6 +107,29 @@ REPAIR_RATES = {
 }
 
 
+def get_repair_rates() -> Dict[str, float]:
+    """Live repair rates: hardcoded defaults merged with any admin overrides
+    from Supabase. Falls back to defaults if settings can't be read."""
+    try:
+        from modules.settings import get_setting
+        saved = get_setting("repair_rates") or {}
+        return {**REPAIR_RATES, **saved}
+    except Exception:
+        return REPAIR_RATES
+
+
+def get_strategy_defaults() -> Dict[str, Any]:
+    """Live DEFAULTS: hardcoded defaults merged with admin overrides for both
+    strategy thresholds and financing params. Falls back to defaults on error."""
+    try:
+        from modules.settings import get_setting
+        saved_t = get_setting("strategy_thresholds") or {}
+        saved_f = get_setting("financing_params") or {}
+        return {**DEFAULTS, **saved_t, **saved_f}
+    except Exception:
+        return DEFAULTS
+
+
 # ============================================================================
 # REHAB CALCULATOR — mirrors the toggle-based rehab estimate
 # ============================================================================
@@ -128,7 +154,7 @@ def rehab_subtotal(rehab: Dict[str, Any], sqft: int, baths: float, pool: bool) -
       other_1: {"include": bool, "amount": float, "description": str}
       other_2: {"include": bool, "amount": float, "description": str}
     """
-    r = REPAIR_RATES
+    r = get_repair_rates()
     total = 0.0
 
     def get(key):
@@ -257,7 +283,7 @@ def rehab_breakdown(rehab: Dict[str, Any], sqft: int, baths: float, pool: bool) 
     """Return a list of (item_name, amount) for each included rehab line item.
     Items not included (toggle=No) are omitted.
     """
-    r = REPAIR_RATES
+    r = get_repair_rates()
     items = []
     def get(key): return rehab.get(key, {}) or {}
 
@@ -352,7 +378,7 @@ def rehab_breakdown(rehab: Dict[str, Any], sqft: int, baths: float, pool: bool) 
 # HOLDING COSTS
 # ============================================================================
 def monthly_holding(pool: bool, hoa: float = 0, maintenance: float = 0) -> float:
-    r = REPAIR_RATES
+    r = get_repair_rates()
     water = r["water_with_pool"] if pool else r["water_no_pool"]
     electric = r["electric_with_pool"] if pool else r["electric_no_pool"]
     insurance = r["insurance_vacant"]
@@ -819,7 +845,7 @@ def compute_recommendation(inputs: Dict[str, Any]) -> Dict[str, Any]:
                buyer_prefers_dc, open_to_mls}
       params: optional dict to override DEFAULTS
     """
-    params = {**DEFAULTS, **(inputs.get("params") or {})}
+    params = {**get_strategy_defaults(), **(inputs.get("params") or {})}
     prop = inputs["property"]
     arv = inputs.get("arv", 0) or 0
     rehab = inputs.get("rehab", {}) or {}

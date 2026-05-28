@@ -21,6 +21,7 @@ from modules.memo import build_word_memo, build_pdf_memo
 from modules.db import save_deal, save_chat_bulk
 from modules import chat as chat_mod
 from modules import property_lookup
+
 st.set_page_config(page_title="New Deal", page_icon="📝", layout="wide")
 user = require_login()
 sidebar_account_widget()

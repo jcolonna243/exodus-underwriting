@@ -40,7 +40,7 @@ def require_login():
 
     # If user is not logged in, show login button
     if not getattr(st, "user", None) or not st.user.is_logged_in:
-      # Centered brand logo on the login screen
+        # Centered brand logo on the login screen
         _l, _c, _r = st.columns([1, 2, 1])
         with _c:
             st.image("assets/sell_to_exodus.png", use_container_width=True)
@@ -51,12 +51,23 @@ def require_login():
             st.login()
         st.stop()
 
-    # User is logged in — check allow-list
+    # User is logged in — check allow-list. Source of truth: Supabase
+    # settings["allowed_emails"], with fallback to st.secrets["allowed_emails"]
+    # so the app still works during the migration.
     email = (st.user.email or "").lower().strip()
+    allowed = []
     try:
-        allowed = [e.lower().strip() for e in st.secrets["allowed_emails"]["emails"]]
+        from modules.settings import get_setting
+        db_list = get_setting("allowed_emails")
+        if db_list:
+            allowed = [e.lower().strip() for e in db_list]
     except Exception:
-        allowed = []
+        pass
+    if not allowed:
+        try:
+            allowed = [e.lower().strip() for e in st.secrets["allowed_emails"]["emails"]]
+        except Exception:
+            allowed = []
 
     if email not in allowed:
         st.error(f"Sorry — `{email}` is not on the allow-list for this app.")
