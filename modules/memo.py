@@ -100,18 +100,10 @@ def build_word_memo(prop: Dict, rec: Dict, seller: Dict, rehab_items: List = Non
         ("Seller's Asking", fmt_money(prop.get("asking", 0))),
     ])
 
-    # === KEY NUMBERS ===
+   # === KEY NUMBERS === (strategy-aware — investor vs MLS vs Pass)
+    from modules.strategy import key_numbers_for
     _add_section(doc, "Key Numbers")
-    _add_kv_table(doc, [
-        ("ARV", fmt_money(rec.get("arv", 0))),
-        ("Total Rehab", fmt_money(rec.get("rehab_total", 0))),
-        ("Total Project Cost", fmt_money(rec.get("total_project_cost", 0))),
-        ("Projected Net Profit", fmt_money(rec.get("net_profit", 0))),
-        ("Projected ROI", fmt_pct(rec.get("roi", 0))),
-        ("Cash Offer", fmt_money(rec.get("cash_offer", 0))),
-        ("Wholesale Offer", fmt_money(rec.get("wholesale_offer", 0))),
-        ("Deal Status", rec.get("deal_status", "—")),
-    ])
+    _add_kv_table(doc, key_numbers_for(rec, prop))
 
     # === REHAB LINE ITEMS ===
     if rehab_items:
@@ -372,18 +364,10 @@ def build_pdf_memo(prop: Dict, rec: Dict, seller: Dict, rehab_items: List = None
         ("Seller's Asking", fmt_money(prop.get("asking", 0))),
     ]))
 
-    # Key Numbers
+    # Key Numbers — strategy-aware (investor vs MLS vs Pass)
+    from modules.strategy import key_numbers_for
     story.append(Paragraph("Key Numbers", section_s))
-    story.append(kv_table([
-        ("ARV", fmt_money(rec.get("arv", 0))),
-        ("Total Rehab", fmt_money(rec.get("rehab_total", 0))),
-        ("Total Project Cost", fmt_money(rec.get("total_project_cost", 0))),
-        ("Projected Net Profit", fmt_money(rec.get("net_profit", 0))),
-        ("Projected ROI", fmt_pct(rec.get("roi", 0))),
-        ("Cash Offer", fmt_money(rec.get("cash_offer", 0))),
-        ("Wholesale Offer", fmt_money(rec.get("wholesale_offer", 0))),
-        ("Deal Status", rec.get("deal_status", "—")),
-    ]))
+    story.append(kv_table(key_numbers_for(rec, prop)))
 
     # Rehab Line Items
     if rehab_items:
