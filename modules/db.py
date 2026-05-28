@@ -38,7 +38,7 @@ def load_chat_messages(deal_id: int) -> List[Dict[str, Any]]:
     """Load all chat messages for a deal, in chronological order."""
     c = get_client()
     res = (c.table("chat_messages")
-            .select("id,created_at,role,content")
+            .select("*")
             .eq("deal_id", deal_id)
             .order("id", desc=False)
             .execute())
@@ -86,10 +86,7 @@ def list_deals(limit: int = 200, search: Optional[str] = None,
                strategy_filter: Optional[str] = None) -> List[Dict[str, Any]]:
     """List deals (newest first). Supports address search + strategy filter."""
     c = get_client()
-    q = c.table("deals").select(
-        "id,created_at,created_by,address,city,state,zip,strategy,"
-        "arv,asking,cash_offer,wholesale_offer,net_profit"
-    )
+   q = c.table("deals").select("*")
     if search:
         q = q.ilike("address", f"%{search}%")
     if strategy_filter and strategy_filter != "All":
