@@ -72,11 +72,13 @@ if selected_id > 0:
             </div>
             """, unsafe_allow_html=True)
 
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("ARV", f"${outputs.get('arv', 0):,.0f}")
-        c2.metric("Asking", f"${prop.get('asking', 0):,.0f}")
-        c3.metric("Net Profit", f"${outputs.get('net_profit', 0):,.0f}")
-        c4.metric("Cash Offer", f"${outputs.get('cash_offer', 0):,.0f}")
+        # Key Numbers — strategy-aware
+        from modules.strategy import key_numbers_for
+        metrics = key_numbers_for(outputs, prop)
+        for i in range(0, len(metrics), 4):
+            cols = st.columns(4)
+            for j, (label, value) in enumerate(metrics[i:i + 4]):
+                cols[j].metric(label, value)
 
         c1, c2, c3 = st.columns(3)
 
