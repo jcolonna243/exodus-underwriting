@@ -667,6 +667,62 @@ def fmt_money(x: float) -> str:
     return f"${x:,.0f}"
 
 
+def fmt_pct(x: float) -> str:
+    if x is None:
+        return "0%"
+    return f"{x:.1%}"
+
+
+def key_numbers_for(rec: Dict[str, Any], prop: Dict[str, Any]) -> List[tuple]:
+    """Return [(label, value_str), ...] of strategy-appropriate Key Numbers
+    for display in the UI and memos.
+
+    Different strategy families surface different metrics:
+      - Investor strategies (Wholesale / DC / Rehab / Novation / Short Sale)
+        show MAO-based numbers + Deal Status (the original 8 metrics).
+      - MLS Referral hides MAO offers and shows commission + equity instead.
+      - Pass strategies show gap analysis only — no investor metrics.
+
+    Always returns a list of 2-tuples (label, formatted_value) so callers can
+    render however they like (st.metric, kv table, etc.).
+    """
+    strategy = rec.get("strategy", "")
+    asking = prop.get("asking", 0) or 0
+
+    # MLS Referral — we're listing, not buying
+    if "MLS" in strategy:
+        return [
+            ("ARV", fmt_money(rec.get("arv", 0))),
+            ("Asking", fmt_money(asking)),
+            ("Total Rehab", fmt_money(rec.get("rehab_total", 0))),
+            ("Est. MLS Commission", fmt_money(rec.get("mls_commission_estimate", 0))),
+            ("Equity Position", fmt_money(rec.get("equity", 0))),
+        ]
+
+    # Pass strategies — walk-away, gap is what matters
+    if "Pass" in strategy or strategy.startswith("NO-GO"):
+        return [
+            ("ARV", fmt_money(rec.get("arv", 0))),
+            ("Asking", fmt_money(asking)),
+            ("Total Rehab", fmt_money(rec.get("rehab_total", 0))),
+            ("Cash MAO (Our Max)", fmt_money(rec.get("cash_offer", 0))),
+            ("Gap (Asking − MAO)", fmt_money(rec.get("gap", 0))),
+            ("Gap Category", rec.get("gap_category", "—")),
+        ]
+
+    # Default: investor strategy — full Key Numbers
+    return [
+        ("ARV", fmt_money(rec.get("arv", 0))),
+        ("Total Rehab", fmt_money(rec.get("rehab_total", 0))),
+        ("Net Profit", fmt_money(rec.get("net_profit", 0))),
+        ("ROI", fmt_pct(rec.get("roi", 0))),
+        ("Cash Offer", fmt_money(rec.get("cash_offer", 0))),
+        ("Wholesale Offer", fmt_money(rec.get("wholesale_offer", 0))),
+        ("Total Project Cost", fmt_money(rec.get("total_project_cost", 0))),
+        ("Deal Status", rec.get("deal_status", "—")),
+    ]
+
+
 def rationale_text(strategy: str, ctx: Dict) -> str:
     """Generate the strategy rationale paragraph."""
     p = ctx
