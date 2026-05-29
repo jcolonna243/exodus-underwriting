@@ -15,7 +15,7 @@ import streamlit as st
 
 RENTCAST_BASE_URL = "https://api.rentcast.io/v1"
 RENTCAST_PROPERTIES_ENDPOINT = f"{RENTCAST_BASE_URL}/properties"
-RENTCAST_AVM_SALE_ENDPOINT = f"{RENTCAST_BASE_URL}/avm/sale"
+RENTCAST_AVM_VALUE_ENDPOINT = f"{RENTCAST_BASE_URL}/avm/value"
 TIMEOUT_SECONDS = 12
 
 # Mapping from our UI labels to RentCast's propertyType values
@@ -189,7 +189,7 @@ def fetch_comps(address: str, property_type: str = "Single Family Residence",
         params["squareFootage"] = sqft
 
     try:
-        url = f"{RENTCAST_AVM_SALE_ENDPOINT}?{urllib.parse.urlencode(params)}"
+        url = f"{RENTCAST_AVM_VALUE_ENDPOINT}?{urllib.parse.urlencode(params)}"
         req = urllib.request.Request(url, headers={
             "X-Api-Key": _api_key(),
             "Accept": "application/json",
@@ -215,7 +215,11 @@ def fetch_comps(address: str, property_type: str = "Single Family Residence",
         sqft_val = int(c.get("squareFootage") or 0)
         sold_price = float(c.get("price") or 0)
         sold_date = c.get("removedDate") or c.get("lastSeenDate") or c.get("createdDate") or ""
-        # Calculate $/sqft on-the-fly
+        listing_type = c.get("listingType") or ""
+        # Build a notes string flagging distressed/new-construction sales
+        notes = ""
+        if listing_type and listing_type not in ("Standard", ""):
+            notes = f"⚠ {listing_type}"
         psf = (sold_price / sqft_val) if sqft_val > 0 and sold_price > 0 else 0
         comps.append({
             "address": c.get("formattedAddress") or c.get("addressLine1") or "",
@@ -233,8 +237,9 @@ def fetch_comps(address: str, property_type: str = "Single Family Residence",
             "pool": bool(features.get("pool")),
             "garage_spaces": int(features.get("garageSpaces") or features.get("garage") or 0),
             "property_type": c.get("propertyType") or "",
+            "listing_type": listing_type,
             "dollar_per_sqft": psf,
-            "notes": "",
+            "notes": notes,
         })
 
     return {
