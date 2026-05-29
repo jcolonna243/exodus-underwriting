@@ -840,7 +840,46 @@ def key_numbers_for(rec: Dict[str, Any], prop: Dict[str, Any]) -> List[tuple]:
             ("Gap Category", rec.get("gap_category", "—")),
         ]
 
-    # Default: investor strategy — full Key Numbers
+    # Strategy-specific Key Numbers based on proforma_kind
+    kind = rec.get("proforma_kind", "rehab")
+
+    if kind == "dc":
+        # Double Close — buy from seller, resell to end buyer same day
+        spread = rec.get("cash_offer", 0) - rec.get("likely_purchase_price", 0)
+        return [
+            ("ARV", fmt_money(rec.get("arv", 0))),
+            ("Our Buy Price", fmt_money(rec.get("likely_purchase_price", 0))),
+            ("End Buyer Price", fmt_money(rec.get("cash_offer", 0))),
+            ("Gross Spread", fmt_money(spread)),
+            ("Rehab (end buyer's)", fmt_money(rec.get("rehab_total", 0))),
+            ("Net Profit (DC)", fmt_money(rec.get("net_profit", 0))),
+            ("ROI", fmt_pct(rec.get("roi", 0))),
+            ("Deal Status", rec.get("deal_status", "—")),
+        ]
+
+    if kind == "assignment":
+        return [
+            ("ARV", fmt_money(rec.get("arv", 0))),
+            ("Total Rehab (end buyer's)", fmt_money(rec.get("rehab_total", 0))),
+            ("Our Wholesale Offer", fmt_money(rec.get("wholesale_offer", 0))),
+            ("End Buyer MAO (Cash)", fmt_money(rec.get("cash_offer", 0))),
+            ("Target Assignment Fee",
+             fmt_money(rec.get("target_assignment_fee") or rec.get("net_profit", 0))),
+            ("Net Profit", fmt_money(rec.get("net_profit", 0))),
+            ("Deal Status", rec.get("deal_status", "—")),
+        ]
+
+    if kind == "novation":
+        return [
+            ("ARV", fmt_money(rec.get("arv", 0))),
+            ("Seller's Benchmark", fmt_money(rec.get("benchmark", 0))),
+            ("Max Asking for Novation", fmt_money(rec.get("novation_max_asking", 0))),
+            ("Total Rehab", fmt_money(rec.get("rehab_total", 0))),
+            ("Novation Profit", fmt_money(rec.get("net_profit", 0))),
+            ("Deal Status", rec.get("deal_status", "—")),
+        ]
+
+    # Default: Rehab strategy (incl. Short Sale → Rehab, Novation handled above)
     # When asking < MAO, show profit at asking AND profit at MAO
     at_asking_profit = rec.get("net_profit_at_asking")
     if at_asking_profit is not None:
