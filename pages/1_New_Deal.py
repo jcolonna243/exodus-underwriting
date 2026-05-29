@@ -63,7 +63,8 @@ if do_lookup:
         if result.get("found"):
             updated = []
             for field in ["city", "state", "zip", "beds", "baths", "sqft",
-                          "year", "pool", "hoa", "annual_taxes"]:
+                          "year", "pool", "hoa", "annual_taxes",
+                          "garage_spaces", "property_type"]:
                 v = result.get(field)
                 if v not in (None, 0, "", "0"):
                     st.session_state[field] = v
@@ -108,16 +109,28 @@ asking = c4.number_input("Seller's Asking Price",
                          min_value=0, value=0, step=1000, key="asking",
                          help="What the seller publicly wants for the property.")
 
-c1, c2 = st.columns([1, 3])
-acquisition_type = c1.selectbox(
+c1, c2, c3, c4 = st.columns(4)
+property_type = c1.selectbox(
+    "Property Type",
+    ["Single Family Residence", "Condo", "Townhouse",
+     "Multi-Family (2-4 units)", "Manufactured / Mobile", "Land"],
+    key="property_type",
+    help="Used for matching comps in the auto comp pull.",
+)
+waterfront = c2.selectbox(
+    "Waterfront", ["No", "Canal/Lake", "Ocean"],
+    key="waterfront",
+    help="Applied as a comp adjustment: subject on canal pays +$75k vs no-water comps, etc.",
+)
+garage_spaces = c3.number_input(
+    "Garage Spaces", min_value=0, max_value=6, value=0, step=1, key="garage_spaces",
+    help="Applied as a comp adjustment when comp differs.",
+)
+acquisition_type = c4.selectbox(
     "Acquisition Type", ["Regular", "Short Sale"],
     key="acquisition_type",
-    help="Short Sale means the seller's lender covers seller-side closing costs, "
-         "so our AB closing drops from 4% to 2%.",
+    help="Short Sale = seller's lender covers seller-side closing costs.",
 )
-c2.caption("**Regular** = standard purchase. **Short Sale** = seller's lender accepts "
-           "less than full payoff; AB closing is lower since seller's costs are covered "
-           "by the bank.")
 
 property_dict = {
     "address": address, "city": city, "state": state, "zip": zip_code,
@@ -125,6 +138,9 @@ property_dict = {
     "pool": pool, "hoa": hoa, "asking": asking,
     "acquisition_type": acquisition_type,
     "annual_taxes": annual_taxes,
+    "property_type": property_type,
+    "waterfront": waterfront,
+    "garage_spaces": garage_spaces,
 }
 
 # ============================================================================
@@ -136,29 +152,99 @@ st.markdown("### 2. Comps")
 if "comps_df" not in st.session_state:
     st.session_state.comps_df = None
 
-upload = st.file_uploader(
-    "Upload your realtor's comp report (PDF, CSV, or Excel)",
-    type=["pdf", "csv", "xlsx", "xls"],
-    help="Auto-parses common MLS export formats and PDF Comparable Sales Reports "
-         "(PropStream-style). Populates the candidates table below — uncheck rows "
-         "that don't fit, and Suggested ARV recalculates.",
+# --- Auto pull from RentCast ---------------------------------------------
+from modules.comp_import import filter_comps, adjust_all
+from modules import property_lookup as _proplookup
+
+c_pull, c_pull_info = st.columns([1, 4])
+do_pull = c_pull.button(
+    "🔍 Pull Comps",
+    use_container_width=True,
+    help="Pull comparable sold properties from RentCast based on the subject's "
+         "address and property type. Filters by team rules; applies adjustments.",
 )
-if upload is not None:
-    try:
-        comps = parse_comp_file(upload, filename=upload.name)
-        # Build the candidates DataFrame
-        df = pd.DataFrame(comps)
-        df.insert(0, "use", True)
-        st.session_state.comps_df = df
-        st.success(f"Imported {len(df)} comp candidates.")
-    except Exception as e:
-        st.error(f"Could not parse the file: {e}")
+with c_pull_info:
+    if _proplookup.is_configured():
+        st.caption("Pulls 5-7 comps from RentCast (MLS + public records), "
+                   "filters by team rules (distance, age, sqft, beds/baths/year, "
+                   "same property type), and auto-adjusts for pool / waterfront / "
+                   "garage / bed-bath differences.")
+    else:
+        st.caption("⚠️ RentCast API key not configured in Streamlit Secrets.")
+
+if do_pull:
+    if not address.strip():
+        st.warning("Enter the address first.")
+    elif not _proplookup.is_configured():
+        st.error("RentCast API key not configured.")
+    else:
+        from modules.strategy import get_strategy_defaults
+        params = get_strategy_defaults()
+        with st.spinner("Pulling comps from RentCast…"):
+            result = _proplookup.fetch_comps(
+                address,
+                property_type=property_type,
+                radius=params.get("comp_max_radius_miles", 0.5),
+                days_old=params.get("comp_max_days_old", 180),
+                comp_count=params.get("comp_count", 7),
+            )
+        if result.get("error"):
+            st.error(f"Pull failed: {result['error']}")
+        elif not result.get("comps"):
+            st.warning("No comps returned. Try widening filter rules in Admin, "
+                       "or upload a PropStream PDF as fallback below.")
+        else:
+            raw = result["comps"]
+            filtered = filter_comps(raw, property_dict, params)
+            # If filtering drops everything, fall back to raw (warn user)
+            if not filtered:
+                st.warning(f"All {len(raw)} comps were filtered out. Showing "
+                           f"unfiltered. Loosen filter rules in Admin to keep more.")
+                filtered = raw
+            # Apply price adjustments (pool, waterfront, garage, etc.)
+            adj_table = {k: params.get(k, 0) for k in [
+                "adj_pool", "adj_waterfront_canal", "adj_waterfront_ocean",
+                "adj_garage_1car", "adj_garage_2car",
+                "adj_extra_bedroom", "adj_extra_half_bath",
+            ]}
+            adjusted = adjust_all(filtered, property_dict, adj_table)
+            df_pulled = pd.DataFrame(adjusted)
+            df_pulled.insert(0, "use", True)
+            st.session_state.comps_df = df_pulled
+            st.success(f"✅ Pulled {len(adjusted)} comps (of {len(raw)} returned). "
+                       f"RentCast AVM: ${result.get('subject_avm', 0):,.0f}.")
+            st.rerun()
+
+# --- PDF / Excel upload fallback ----------------------------------------
+with st.expander("📎 Or upload a comp report (PDF, CSV, Excel) — fallback for sparse markets",
+                 expanded=False):
+    upload = st.file_uploader(
+        "Upload your realtor's comp report",
+        type=["pdf", "csv", "xlsx", "xls"],
+        help="Auto-parses common MLS export formats and PDF Comparable Sales Reports.",
+    )
+    if upload is not None:
+        try:
+            comps = parse_comp_file(upload, filename=upload.name)
+            df = pd.DataFrame(comps)
+            df.insert(0, "use", True)
+            st.session_state.comps_df = df
+            st.success(f"Imported {len(df)} comp candidates.")
+        except Exception as e:
+            st.error(f"Could not parse the file: {e}")
 
 if st.session_state.comps_df is not None and not st.session_state.comps_df.empty:
     st.write("**Candidate comps** — uncheck rows you don't want to use.")
-    display_cols = ["use", "address", "city", "sqft", "beds", "baths",
-                    "year", "sold_price", "sold_date", "distance", "notes"]
     df = st.session_state.comps_df
+    # If pulled from RentCast, show adjusted_price column too
+    has_adjusted = "adjusted_price" in df.columns and df["adjusted_price"].notna().any()
+    if has_adjusted:
+        display_cols = ["use", "address", "city", "sqft", "beds", "baths",
+                        "year", "sold_price", "adjusted_price", "sold_date",
+                        "distance", "notes"]
+    else:
+        display_cols = ["use", "address", "city", "sqft", "beds", "baths",
+                        "year", "sold_price", "sold_date", "distance", "notes"]
     for col in display_cols:
         if col not in df.columns: df[col] = None
 
@@ -168,6 +254,10 @@ if st.session_state.comps_df is not None and not st.session_state.comps_df.empty
             "use": st.column_config.CheckboxColumn("Use?", default=True),
             "sold_price": st.column_config.NumberColumn(
                 "Sold Price", format="$%d"),
+            "adjusted_price": st.column_config.NumberColumn(
+                "Adjusted Price", format="$%d",
+                help="Sold price adjusted for pool / waterfront / garage / "
+                     "bed-bath differences vs your subject."),
             "sqft": st.column_config.NumberColumn("Sqft", format="%d"),
             "distance": st.column_config.NumberColumn("Distance (mi)", format="%.1f"),
         },
@@ -178,9 +268,23 @@ if st.session_state.comps_df is not None and not st.session_state.comps_df.empty
     )
     st.session_state.comps_df = edited
 
-    # Compute ARV from selected comps
+    # Show adjustment breakdown for each comp (if available)
+    if has_adjusted and "adjustments" in df.columns:
+        with st.expander("🔧 Adjustment details (click to see how each comp was adjusted)"):
+            for i, row in df.iterrows():
+                adjs = row.get("adjustments") or []
+                if isinstance(adjs, list) and adjs:
+                    addr = row.get("address", "?")
+                    sold = row.get("sold_price", 0)
+                    adj = row.get("adjusted_price", 0)
+                    st.markdown(f"**{addr}** — sold ${sold:,.0f} → adjusted ${adj:,.0f}")
+                    for label, amt in adjs:
+                        sign = "+" if amt >= 0 else "−"
+                        st.write(f"  {sign}${abs(amt):,.0f}  {label}")
+
+    # Compute ARV from selected comps — use adjusted prices when available
     selected = edited[edited["use"] == True].to_dict("records") if "use" in edited.columns else edited.to_dict("records")
-    arv_info = suggested_arv(selected, subject_sqft=sqft)
+    arv_info = suggested_arv(selected, subject_sqft=sqft, use_adjusted=has_adjusted)
 
     cA, cB, cC, cD = st.columns(4)
     cA.metric("Avg sale", f"${arv_info['avg_sale']:,.0f}")

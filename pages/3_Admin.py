@@ -43,10 +43,11 @@ def _save_button(label: str) -> bool:
     return st.form_submit_button(label, type="primary", use_container_width=True)
 
 
-tab_repair, tab_strat, tab_fin, tab_emails, tab_export = st.tabs([
+tab_repair, tab_strat, tab_fin, tab_comps, tab_emails, tab_export = st.tabs([
     "🔨 Repair Rates",
     "📐 Strategy Thresholds",
     "💵 Financing & Closing",
+    "📊 Comp Settings",
     "👥 Allow-List",
     "📦 Export / Import",
 ])
@@ -416,7 +417,157 @@ with tab_fin:
 
 
 # ============================================================================
-# TAB 4 — ALLOW-LIST
+# TAB 4 — COMP SETTINGS (filters + adjustments + test button)
+# ============================================================================
+with tab_comps:
+    st.markdown("### Comp Filter Rules")
+    st.caption("These rules filter the comps that RentCast returns. Loosen them "
+               "if you're getting too few comps in sparse markets.")
+
+    # Comp filter rules and adjustments live in the strategy_thresholds bucket
+    # (they're admin-overrideable like every other parameter).
+    saved = st_settings.get_setting("comp_settings") or {}
+    live = {**strategy.DEFAULTS, **saved}
+
+    with st.form("comp_settings_form"):
+        new_comps = {}
+        c1, c2, c3 = st.columns(3)
+        new_comps["comp_max_radius_miles"] = c1.number_input(
+            "Max radius (miles)",
+            value=float(live.get("comp_max_radius_miles", 0.5)),
+            min_value=0.05, max_value=5.0, step=0.05, format="%.2f")
+        new_comps["comp_max_days_old"] = c2.number_input(
+            "Max age (days sold)",
+            value=int(live.get("comp_max_days_old", 180)),
+            min_value=30, max_value=730, step=30)
+        new_comps["comp_count"] = c3.number_input(
+            "Comp count (5-25)",
+            value=int(live.get("comp_count", 7)),
+            min_value=1, max_value=25, step=1)
+
+        c1, c2, c3 = st.columns(3)
+        new_comps["comp_sqft_tolerance_pct"] = c1.number_input(
+            "Sqft tolerance (±%)",
+            value=float(live.get("comp_sqft_tolerance_pct", 0.25)),
+            min_value=0.0, max_value=1.0, step=0.05, format="%.2f")
+        new_comps["comp_beds_tolerance"] = c2.number_input(
+            "Beds tolerance (±)",
+            value=int(live.get("comp_beds_tolerance", 1)),
+            min_value=0, max_value=3, step=1)
+        new_comps["comp_baths_tolerance"] = c3.number_input(
+            "Baths tolerance (±)",
+            value=float(live.get("comp_baths_tolerance", 0.5)),
+            min_value=0.0, max_value=2.0, step=0.5, format="%.1f")
+
+        new_comps["comp_year_tolerance"] = st.number_input(
+            "Year built tolerance (± years)",
+            value=int(live.get("comp_year_tolerance", 15)),
+            min_value=0, max_value=50, step=1)
+
+        st.markdown("---")
+        st.markdown("### Price Adjustments")
+        st.caption("Dollar values for amenity differences between subject and comp. "
+                   "Tune these to match your market — South Florida defaults shown.")
+        c1, c2, c3 = st.columns(3)
+        new_comps["adj_pool"] = c1.number_input(
+            "Pool ($)", value=int(live.get("adj_pool", 25_000)), step=1_000)
+        new_comps["adj_waterfront_canal"] = c2.number_input(
+            "Waterfront — Canal/Lake ($)",
+            value=int(live.get("adj_waterfront_canal", 75_000)), step=5_000)
+        new_comps["adj_waterfront_ocean"] = c3.number_input(
+            "Waterfront — Ocean ($)",
+            value=int(live.get("adj_waterfront_ocean", 250_000)), step=10_000)
+
+        c1, c2, c3 = st.columns(3)
+        new_comps["adj_garage_1car"] = c1.number_input(
+            "Garage — 1-car ($)",
+            value=int(live.get("adj_garage_1car", 10_000)), step=1_000)
+        new_comps["adj_garage_2car"] = c2.number_input(
+            "Garage — 2-car or more ($)",
+            value=int(live.get("adj_garage_2car", 20_000)), step=1_000)
+        new_comps["adj_extra_bedroom"] = c3.number_input(
+            "Extra bedroom ($ each)",
+            value=int(live.get("adj_extra_bedroom", 15_000)), step=1_000)
+
+        new_comps["adj_extra_half_bath"] = st.number_input(
+            "Extra half-bath ($ each)",
+            value=int(live.get("adj_extra_half_bath", 7_500)), step=500)
+
+        st.markdown("---")
+        col_save, col_reset = st.columns([3, 1])
+        with col_save:
+            saved_ok = _save_button("💾 Save Comp Settings")
+        with col_reset:
+            reset = st.form_submit_button("Reset to Defaults",
+                                          use_container_width=True)
+
+        if saved_ok:
+            if st_settings.set_setting("comp_settings", new_comps,
+                                       updated_by=user["email"]):
+                st.success("✅ Comp settings saved.")
+                st.rerun()
+            else:
+                st.error("Failed to save.")
+        elif reset:
+            if st_settings.set_setting("comp_settings", {},
+                                       updated_by=user["email"]):
+                st.success("✅ Reset to hardcoded defaults.")
+                st.rerun()
+
+    # --- Test button (outside the form so it can re-run independently) ---
+    st.markdown("---")
+    st.markdown("### 🧪 Test current settings")
+    st.caption("Enter an address to preview what comps come back with your current "
+               "filter rules and adjustments. Costs 1 RentCast lookup per test.")
+    c_addr, c_btn = st.columns([3, 1])
+    test_addr = c_addr.text_input("Test address", key="test_comp_address",
+                                  placeholder="e.g. 8420 SW 152nd St, Miami, FL 33176")
+    test_btn = c_btn.button("🧪 Run Test", use_container_width=True)
+
+    if test_btn and test_addr.strip():
+        from modules import property_lookup as _pl
+        from modules.comp_import import filter_comps, adjust_all
+        params = {**strategy.DEFAULTS, **(st_settings.get_setting("comp_settings") or {})}
+        with st.spinner("Pulling test comps…"):
+            # First look up the subject so we know its sqft / beds / etc. for filtering
+            subj = _pl.lookup_property(test_addr)
+            if not subj.get("found"):
+                st.error(f"Couldn't look up subject: {subj.get('error', 'no match')}")
+            else:
+                res = _pl.fetch_comps(
+                    test_addr, property_type=subj.get("property_type", "Single Family Residence"),
+                    radius=params.get("comp_max_radius_miles", 0.5),
+                    days_old=params.get("comp_max_days_old", 180),
+                    comp_count=params.get("comp_count", 7),
+                )
+                if res.get("error"):
+                    st.error(f"Pull failed: {res['error']}")
+                else:
+                    raw = res.get("comps", [])
+                    filtered = filter_comps(raw, subj, params)
+                    adj_table = {k: params.get(k, 0) for k in [
+                        "adj_pool", "adj_waterfront_canal", "adj_waterfront_ocean",
+                        "adj_garage_1car", "adj_garage_2car",
+                        "adj_extra_bedroom", "adj_extra_half_bath",
+                    ]}
+                    adjusted = adjust_all(filtered, subj, adj_table)
+                    st.success(f"Pulled {len(raw)} raw comps, "
+                               f"{len(filtered)} passed filters. "
+                               f"RentCast AVM: ${res.get('subject_avm', 0):,.0f}")
+                    if adjusted:
+                        import pandas as pd
+                        cols = ["address", "sqft", "beds", "baths", "year",
+                                "sold_price", "adjusted_price", "sold_date",
+                                "distance"]
+                        df = pd.DataFrame(adjusted)
+                        for c in cols:
+                            if c not in df.columns: df[c] = None
+                        st.dataframe(df[cols], use_container_width=True,
+                                     hide_index=True)
+
+
+# ============================================================================
+# TAB 5 — ALLOW-LIST
 # ============================================================================
 with tab_emails:
     st.markdown("### Sign-in Allow-List")

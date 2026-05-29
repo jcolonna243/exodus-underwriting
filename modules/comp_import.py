@@ -326,19 +326,26 @@ def parse_comp_file(file_obj_or_bytes, filename: str = "") -> List[Dict[str, Any
     return comps
 
 
-def suggested_arv(comps: List[Dict[str, Any]], subject_sqft: Optional[int] = None) -> Dict[str, float]:
-    selected = [c for c in comps if c.get("sold_price")]
+def suggested_arv(comps: List[Dict[str, Any]], subject_sqft: Optional[int] = None,
+                  use_adjusted: bool = False) -> Dict[str, float]:
+    """Compute suggested ARV from comp records.
+
+    If ``use_adjusted=True`` and the comp has an ``adjusted_price`` field, that
+    is used in place of ``sold_price`` for all calculations.
+    """
+    price_key = "adjusted_price" if use_adjusted else "sold_price"
+    selected = [c for c in comps if c.get(price_key) or c.get("sold_price")]
     if not selected:
         return {"avg_sale": 0, "median_sale": 0, "avg_psf_times_sqft": 0,
                 "median_psf_times_sqft": 0, "suggested": 0}
-    prices = [c["sold_price"] for c in selected]
-    # Compute dollar_per_sqft on the fly if not present (the Streamlit data
-    # editor drops the column when displaying, so it's often missing here).
+    prices = [c.get(price_key) or c["sold_price"] for c in selected]
+    # Compute dollar_per_sqft on the fly if not present (data editor drops it)
     psf = []
     for c in selected:
+        price = c.get(price_key) or c.get("sold_price") or 0
         psf_val = c.get("dollar_per_sqft")
-        if not psf_val and c.get("sqft") and c.get("sold_price"):
-            psf_val = c["sold_price"] / c["sqft"]
+        if not psf_val and c.get("sqft") and price:
+            psf_val = price / c["sqft"]
         if psf_val:
             psf.append(psf_val)
     avg_sale = sum(prices) / len(prices)
@@ -361,3 +368,178 @@ def suggested_arv(comps: List[Dict[str, Any]], subject_sqft: Optional[int] = Non
             "avg_psf_times_sqft": avg_psf_times_sqft,
             "median_psf_times_sqft": median_psf_times_sqft,
             "suggested": suggested}
+
+
+# ---------------------------------------------------------------------------
+# Comp filter rules — applied AFTER pulling from RentCast
+# ---------------------------------------------------------------------------
+def filter_comps(comps: List[Dict[str, Any]], subject: Dict[str, Any],
+                 rules: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Apply SFR comping filter rules to a list of comps. Returns the subset
+    that passes ALL filters.
+
+    Filters applied (any subject value of 0 / None skips that filter):
+      - same property_type (strict)
+      - distance ≤ comp_max_radius_miles
+      - days_old ≤ comp_max_days_old (when sold date is parseable)
+      - sqft within ±comp_sqft_tolerance_pct of subject
+      - beds within ±comp_beds_tolerance of subject
+      - baths within ±comp_baths_tolerance of subject
+      - year built within ±comp_year_tolerance of subject
+    """
+    import datetime as _dt
+    subj_sqft = subject.get("sqft", 0) or 0
+    subj_beds = subject.get("beds", 0) or 0
+    subj_baths = subject.get("baths", 0) or 0
+    subj_year = subject.get("year", 0) or 0
+    subj_type = (subject.get("property_type") or "").strip()
+
+    max_radius = rules.get("comp_max_radius_miles", 0.5)
+    max_days = rules.get("comp_max_days_old", 180)
+    sqft_tol = rules.get("comp_sqft_tolerance_pct", 0.25)
+    beds_tol = rules.get("comp_beds_tolerance", 1)
+    baths_tol = rules.get("comp_baths_tolerance", 0.5)
+    year_tol = rules.get("comp_year_tolerance", 15)
+
+    today = _dt.date.today()
+    passed = []
+    for c in comps:
+        # Distance
+        if max_radius and (c.get("distance") or 0) > max_radius:
+            continue
+        # Date (best-effort parse)
+        sold_date = c.get("sold_date") or ""
+        if max_days and sold_date:
+            try:
+                d = _dt.datetime.fromisoformat(sold_date.replace("Z", "")).date()
+                if (today - d).days > max_days:
+                    continue
+            except Exception:
+                pass  # unparseable date — don't filter out
+        # Sqft
+        if subj_sqft > 0 and sqft_tol > 0:
+            csqft = c.get("sqft") or 0
+            if csqft <= 0 or abs(csqft - subj_sqft) > subj_sqft * sqft_tol:
+                continue
+        # Beds
+        if subj_beds > 0 and beds_tol >= 0:
+            cbeds = c.get("beds") or 0
+            if abs(cbeds - subj_beds) > beds_tol:
+                continue
+        # Baths
+        if subj_baths > 0 and baths_tol >= 0:
+            cbaths = c.get("baths") or 0
+            if abs(cbaths - subj_baths) > baths_tol:
+                continue
+        # Year
+        if subj_year > 0 and year_tol > 0:
+            cyear = c.get("year") or 0
+            if cyear > 0 and abs(cyear - subj_year) > year_tol:
+                continue
+        # Property type (strict match if subject has it set)
+        if subj_type and c.get("property_type"):
+            # Normalize: drop spaces, compare lowercase
+            cnorm = (c["property_type"] or "").strip().lower()
+            snorm = subj_type.lower()
+            # Allow flexible match — "Single Family" vs "Single Family Residence"
+            if not (cnorm in snorm or snorm in cnorm):
+                continue
+        passed.append(c)
+    return passed
+
+
+# ---------------------------------------------------------------------------
+# Comp price adjustments — appraiser-style equivalency math
+# ---------------------------------------------------------------------------
+def apply_adjustments(comp: Dict[str, Any], subject: Dict[str, Any],
+                      adj_table: Dict[str, float]) -> Dict[str, Any]:
+    """Return a copy of the comp with an ``adjusted_price`` field added.
+
+    For each amenity that differs between subject and comp, we adjust the comp's
+    sold price toward what it would have sold for IF it had matched the subject.
+      - subject has feature, comp doesn't → +adj  (comp's value would be higher)
+      - subject lacks feature, comp has it → -adj (comp's value includes the premium)
+    """
+    c = dict(comp)  # shallow copy
+    sold = float(c.get("sold_price") or 0)
+    if sold <= 0:
+        c["adjusted_price"] = 0
+        c["adjustments"] = []
+        return c
+
+    breakdown = []
+
+    def _adj(name, amount):
+        nonlocal sold
+        sold += amount
+        breakdown.append((name, amount))
+
+    # Pool (subject's pool field is "Yes" / "No"; comp's is bool)
+    subj_pool = (subject.get("pool", "No") == "Yes")
+    comp_pool = bool(c.get("pool", False))
+    pool_v = float(adj_table.get("adj_pool", 0) or 0)
+    if pool_v > 0 and subj_pool != comp_pool:
+        _adj("Pool", pool_v if subj_pool else -pool_v)
+
+    # Waterfront — manual entry on subject ("No" / "Canal/Lake" / "Ocean")
+    subj_wf = (subject.get("waterfront", "No") or "No")
+    comp_wf = (c.get("waterfront", "No") or "No")
+    canal_v = float(adj_table.get("adj_waterfront_canal", 0) or 0)
+    ocean_v = float(adj_table.get("adj_waterfront_ocean", 0) or 0)
+    # Score each side: 0=No, 1=Canal/Lake, 2=Ocean
+    wf_score = {"No": 0, "Canal/Lake": 1, "Canal": 1, "Lake": 1, "Ocean": 2}
+    s_score = wf_score.get(subj_wf, 0)
+    c_score = wf_score.get(comp_wf, 0)
+    if s_score != c_score:
+        # If subject is ocean and comp is no-water: add ocean premium
+        # If subject is canal and comp is ocean: subtract (ocean - canal) value
+        s_val = {0: 0, 1: canal_v, 2: ocean_v}.get(s_score, 0)
+        c_val = {0: 0, 1: canal_v, 2: ocean_v}.get(c_score, 0)
+        diff = s_val - c_val
+        if diff != 0:
+            label = f"Waterfront ({subj_wf} vs {comp_wf})"
+            _adj(label, diff)
+
+    # Garage spaces
+    subj_garage = int(subject.get("garage_spaces", 0) or 0)
+    comp_garage = int(c.get("garage_spaces", 0) or 0)
+    if subj_garage != comp_garage:
+        g1 = float(adj_table.get("adj_garage_1car", 0) or 0)
+        g2 = float(adj_table.get("adj_garage_2car", 0) or 0)
+        # Per-car incremental: 1st car = g1; each additional = (g2-g1)
+        s_val = subj_garage * g1 if subj_garage <= 1 else g1 + (subj_garage - 1) * (g2 - g1)
+        c_val = comp_garage * g1 if comp_garage <= 1 else g1 + (comp_garage - 1) * (g2 - g1)
+        diff = s_val - c_val
+        if diff != 0:
+            _adj(f"Garage ({subj_garage} vs {comp_garage})", diff)
+
+    # Bedroom delta (informational — sqft tolerance usually handles this, but
+    # appraisers still do explicit bedroom adjustments)
+    subj_beds = int(subject.get("beds", 0) or 0)
+    comp_beds = int(c.get("beds", 0) or 0)
+    bed_v = float(adj_table.get("adj_extra_bedroom", 0) or 0)
+    if bed_v > 0 and subj_beds != comp_beds:
+        _adj(f"Bedrooms ({subj_beds} vs {comp_beds})",
+             (subj_beds - comp_beds) * bed_v)
+
+    # Half-bath delta (using ceiling for any non-integer bath count)
+    subj_baths = float(subject.get("baths", 0) or 0)
+    comp_baths = float(c.get("baths", 0) or 0)
+    halfbath_v = float(adj_table.get("adj_extra_half_bath", 0) or 0)
+    bath_diff_halves = round((subj_baths - comp_baths) * 2)
+    if halfbath_v > 0 and bath_diff_halves != 0:
+        _adj(f"Baths ({subj_baths} vs {comp_baths})",
+             bath_diff_halves * halfbath_v)
+
+    c["adjusted_price"] = sold
+    c["adjustments"] = breakdown
+    # Recompute $/sqft based on adjusted price
+    if c.get("sqft"):
+        c["adjusted_dollar_per_sqft"] = sold / c["sqft"]
+    return c
+
+
+def adjust_all(comps: List[Dict[str, Any]], subject: Dict[str, Any],
+               adj_table: Dict[str, float]) -> List[Dict[str, Any]]:
+    """Apply adjustments to every comp in a list."""
+    return [apply_adjustments(c, subject, adj_table) for c in comps]

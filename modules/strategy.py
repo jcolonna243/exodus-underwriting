@@ -73,6 +73,22 @@ DEFAULTS = {
     "mls_commission_rate": 0.03,
     "fat_fee_buyer_floor": 50_000,
     "fat_fee_target_pct": 0.25,
+    # Comp filter rules (used when pulling comps from RentCast)
+    "comp_max_radius_miles": 0.5,
+    "comp_max_days_old": 180,          # 6 months
+    "comp_sqft_tolerance_pct": 0.25,   # ±25%
+    "comp_beds_tolerance": 1,          # subject ±1 bed
+    "comp_baths_tolerance": 0.5,       # ±0.5 bath
+    "comp_year_tolerance": 15,         # ±15 years
+    "comp_count": 7,                   # ask RentCast for this many
+    # Comp price adjustments (SoFL market norms — admin-editable)
+    "adj_pool": 25_000,
+    "adj_waterfront_canal": 75_000,
+    "adj_waterfront_ocean": 250_000,
+    "adj_garage_1car": 10_000,
+    "adj_garage_2car": 20_000,
+    "adj_extra_bedroom": 15_000,
+    "adj_extra_half_bath": 7_500,
 }
 
 
@@ -142,13 +158,14 @@ def get_repair_rates() -> Dict[str, float]:
 
 
 def get_strategy_defaults() -> Dict[str, Any]:
-    """Live DEFAULTS: hardcoded defaults merged with admin overrides for both
-    strategy thresholds and financing params. Falls back to defaults on error."""
+    """Live DEFAULTS: hardcoded defaults merged with admin overrides for strategy
+    thresholds, financing params, and comp settings. Falls back on error."""
     try:
         from modules.settings import get_setting
         saved_t = get_setting("strategy_thresholds") or {}
         saved_f = get_setting("financing_params") or {}
-        return {**DEFAULTS, **saved_t, **saved_f}
+        saved_c = get_setting("comp_settings") or {}
+        return {**DEFAULTS, **saved_t, **saved_f, **saved_c}
     except Exception:
         return DEFAULTS
 
