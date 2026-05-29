@@ -63,7 +63,7 @@ if do_lookup:
         if result.get("found"):
             updated = []
             for field in ["city", "state", "zip", "beds", "baths", "sqft",
-                          "year", "pool", "hoa"]:
+                          "year", "pool", "hoa", "annual_taxes"]:
                 v = result.get(field)
                 if v not in (None, 0, "", "0"):
                     st.session_state[field] = v
@@ -97,17 +97,34 @@ sqft = c3.number_input("Living Sqft", min_value=0, value=1500, step=50, key="sqf
 year = c4.number_input("Year Built", min_value=1900, max_value=2030,
                        value=1980, key="year")
 
-c1, c2, c3 = st.columns(3)
+c1, c2, c3, c4 = st.columns(4)
 pool = c1.selectbox("Pool?", ["No", "Yes"], key="pool")
 hoa = c2.number_input("HOA Monthly", min_value=0, value=0, step=25, key="hoa")
-asking = c3.number_input("Seller's Asking Price",
+annual_taxes = c3.number_input(
+    "Annual Property Taxes ($/yr)", min_value=0, value=0, step=100, key="annual_taxes",
+    help="Auto-fills from RentCast. Override if needed.",
+)
+asking = c4.number_input("Seller's Asking Price",
                          min_value=0, value=0, step=1000, key="asking",
                          help="What the seller publicly wants for the property.")
+
+c1, c2 = st.columns([1, 3])
+acquisition_type = c1.selectbox(
+    "Acquisition Type", ["Regular", "Short Sale"],
+    key="acquisition_type",
+    help="Short Sale means the seller's lender covers seller-side closing costs, "
+         "so our AB closing drops from 4% to 2%.",
+)
+c2.caption("**Regular** = standard purchase. **Short Sale** = seller's lender accepts "
+           "less than full payoff; AB closing is lower since seller's costs are covered "
+           "by the bank.")
 
 property_dict = {
     "address": address, "city": city, "state": state, "zip": zip_code,
     "beds": beds, "baths": baths, "sqft": sqft, "year": year,
     "pool": pool, "hoa": hoa, "asking": asking,
+    "acquisition_type": acquisition_type,
+    "annual_taxes": annual_taxes,
 }
 
 # ============================================================================
@@ -251,8 +268,9 @@ with st.container(border=True):
             ["Standard misc work", "Replace Breaker Box", "Full (panel + misc)"],
             "Standard misc work")
     _toggle("ac", "A/C")
-    _toggle("kitchen", "Kitchen")
-    _toggle("bathrooms", "Bathrooms")
+    _toggle("kitchen", "Kitchen", ["Full remodel", "Light update"], "Full remodel")
+    _toggle("bathrooms", "Bathrooms (full)")
+    _toggle("half_bathrooms", "Half Bathrooms", qty_default=1)
     _toggle("interior_paint", "Interior Paint",
             ["Knockdown + Paint", "Paint only", "Knockdown only"], "Knockdown + Paint")
     _toggle("exterior_paint", "Exterior Paint")
@@ -265,6 +283,10 @@ with st.container(border=True):
     _toggle("plumbing", "Plumbing", manual_amount=True)
     _toggle("landscaping", "Landscaping")
     _toggle("appliances", "Appliances")
+    _toggle("lighting", "Lighting (all new)")
+    _toggle("hot_water_tank", "Hot Water Tank")
+    _toggle("cosmetic_demo", "Cosmetic Demo")
+    _toggle("final_cleaning", "Final Cleaning")
     if pool == "Yes":
         _toggle("pool", "Pool",
                 ["Replace Motor", "Replace Pump", "Heater",

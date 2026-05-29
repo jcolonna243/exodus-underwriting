@@ -97,10 +97,12 @@ def build_word_memo(prop: Dict, rec: Dict, seller: Dict, rehab_items: List = Non
          f"{prop.get('beds','—')} bd / {prop.get('baths','—')} ba / "
          f"{prop.get('sqft',0):,} sf / {prop.get('year','—')}"),
         ("Pool / HOA", f"{prop.get('pool','No')} / {fmt_money(prop.get('hoa',0))}/mo"),
+        ("Annual Property Taxes", fmt_money(prop.get("annual_taxes", 0))),
+        ("Acquisition Type", prop.get("acquisition_type", "Regular")),
         ("Seller's Asking", fmt_money(prop.get("asking", 0))),
     ])
 
-   # === KEY NUMBERS === (strategy-aware — investor vs MLS vs Pass)
+    # === KEY NUMBERS === (strategy-aware — investor vs MLS vs Pass)
     from modules.strategy import key_numbers_for
     _add_section(doc, "Key Numbers")
     _add_kv_table(doc, key_numbers_for(rec, prop))
@@ -128,10 +130,17 @@ def build_word_memo(prop: Dict, rec: Dict, seller: Dict, rehab_items: List = Non
 
     # === FINANCIAL PRO-FORMA (for Rehab and Double Close strategies) ===
     strat = rec.get("strategy", "")
-    if strat == "Rehab" or "Double Close" in strat:
+    if "Rehab" in strat or "Double Close" in strat:
         _add_section(doc, "Financial Pro-Forma")
-        if strat == "Rehab":
+        if "Rehab" in strat:
             # Rehab pro-forma: full acquisition, rehab, hold, retail sale
+            purchase_price = rec.get("likely_purchase_price", rec.get("cash_offer", 0))
+            purchase_label = ("Purchase Price (at Asking)"
+                              if rec.get("net_profit_at_asking") is not None
+                              else "Purchase Price (Cash MAO)")
+            monthly_holding_total = rec.get('monthly_holding', 0)
+            ins_line = rec.get('monthly_insurance', 0)
+            tax_line = rec.get('monthly_taxes', 0)
             proforma_rows = [
                 ("SALE SIDE (B→C)", ""),
                 ("  Expected Sale Price (ARV)", fmt_money(rec.get("arv", 0))),
@@ -141,15 +150,18 @@ def build_word_memo(prop: Dict, rec: Dict, seller: Dict, rehab_items: List = Non
                  fmt_money(rec.get("arv", 0) - rec.get("sale_closing_costs", 0))),
                 ("", ""),
                 ("ACQUISITION & PROJECT (A→B + Hold)", ""),
-                ("  Purchase Price (Cash Offer)", fmt_money(rec.get("cash_offer", 0))),
+                (f"  {purchase_label}", fmt_money(purchase_price)),
                 (f"  Plus: AB Closing Costs ({rec.get('purchase_closing_pct', 0.04):.1%})",
                  fmt_money(rec.get("purchase_closing_costs", 0))),
                 ("  Plus: Total Rehab", fmt_money(rec.get("rehab_total", 0))),
                 (f"  Plus: Holding Costs ({rec.get('loan_duration_months', 6)} mo × "
-                 f"{fmt_money(rec.get('monthly_holding', 0))}/mo)",
+                 f"{fmt_money(monthly_holding_total)}/mo)",
                  fmt_money(rec.get("total_holding", 0))),
-                (f"  Plus: Cost of Money ({rec.get('ltv', 0.9):.0%} LTV @ "
-                 f"{rec.get('interest_rate', 0.11):.1%} + {rec.get('points', 0.015):.1%} pts)",
+                (f"      — incl. Insurance {fmt_money(ins_line)}/mo + "
+                 f"Taxes {fmt_money(tax_line)}/mo", ""),
+                (f"  Plus: Cost of Money ({rec.get('ltc', 0.9):.0%} LTC, "
+                 f"loan {fmt_money(rec.get('likely_loan', 0))} @ "
+                 f"{rec.get('interest_rate', 0.10):.1%})",
                  fmt_money(rec.get("cost_of_money", 0))),
                 ("  Total Project Cost", fmt_money(rec.get("total_project_cost", 0))),
                 ("", ""),
@@ -361,6 +373,8 @@ def build_pdf_memo(prop: Dict, rec: Dict, seller: Dict, rehab_items: List = None
          f"{prop.get('beds','—')} bd / {prop.get('baths','—')} ba / "
          f"{prop.get('sqft',0):,} sf / {prop.get('year','—')}"),
         ("Pool / HOA", f"{prop.get('pool','No')} / {fmt_money(prop.get('hoa',0))}/mo"),
+        ("Annual Property Taxes", fmt_money(prop.get("annual_taxes", 0))),
+        ("Acquisition Type", prop.get("acquisition_type", "Regular")),
         ("Seller's Asking", fmt_money(prop.get("asking", 0))),
     ]))
 
@@ -392,9 +406,15 @@ def build_pdf_memo(prop: Dict, rec: Dict, seller: Dict, rehab_items: List = None
 
     # Financial Pro-Forma (for Rehab and Double Close strategies)
     strat = rec.get("strategy", "")
-    if strat == "Rehab" or "Double Close" in strat:
+    if "Rehab" in strat or "Double Close" in strat:
         story.append(Paragraph("Financial Pro-Forma", section_s))
-        if strat == "Rehab":
+        if "Rehab" in strat:
+            purchase_price = rec.get("likely_purchase_price", rec.get("cash_offer", 0))
+            purchase_label = ("Purchase Price (at Asking)"
+                              if rec.get("net_profit_at_asking") is not None
+                              else "Purchase Price (Cash MAO)")
+            ins_line = rec.get('monthly_insurance', 0)
+            tax_line = rec.get('monthly_taxes', 0)
             proforma_rows = [
                 ("<b>SALE SIDE (B→C)</b>", ""),
                 ("&nbsp;&nbsp;Expected Sale Price (ARV)", fmt_money(rec.get("arv", 0))),
@@ -403,15 +423,18 @@ def build_pdf_memo(prop: Dict, rec: Dict, seller: Dict, rehab_items: List = None
                 ("&nbsp;&nbsp;Net Sale Proceeds",
                  fmt_money(rec.get("arv", 0) - rec.get("sale_closing_costs", 0))),
                 ("<b>ACQUISITION &amp; PROJECT (A→B + Hold)</b>", ""),
-                ("&nbsp;&nbsp;Purchase Price (Cash Offer)", fmt_money(rec.get("cash_offer", 0))),
+                (f"&nbsp;&nbsp;{purchase_label}", fmt_money(purchase_price)),
                 (f"&nbsp;&nbsp;Plus: AB Closing Costs ({rec.get('purchase_closing_pct', 0.04):.1%})",
                  fmt_money(rec.get("purchase_closing_costs", 0))),
                 ("&nbsp;&nbsp;Plus: Total Rehab", fmt_money(rec.get("rehab_total", 0))),
                 (f"&nbsp;&nbsp;Plus: Holding Costs ({rec.get('loan_duration_months', 6)} mo × "
                  f"{fmt_money(rec.get('monthly_holding', 0))}/mo)",
                  fmt_money(rec.get("total_holding", 0))),
-                (f"&nbsp;&nbsp;Plus: Cost of Money ({rec.get('ltv', 0.9):.0%} LTV @ "
-                 f"{rec.get('interest_rate', 0.11):.1%} + {rec.get('points', 0.015):.1%} pts)",
+                (f"&nbsp;&nbsp;&nbsp;&nbsp;<i>— incl. Insurance {fmt_money(ins_line)}/mo "
+                 f"+ Taxes {fmt_money(tax_line)}/mo</i>", ""),
+                (f"&nbsp;&nbsp;Plus: Cost of Money ({rec.get('ltc', 0.9):.0%} LTC, "
+                 f"loan {fmt_money(rec.get('likely_loan', 0))} @ "
+                 f"{rec.get('interest_rate', 0.10):.1%})",
                  fmt_money(rec.get("cost_of_money", 0))),
                 ("&nbsp;&nbsp;Total Project Cost", fmt_money(rec.get("total_project_cost", 0))),
                 ("<b>BOTTOM LINE</b>", ""),

@@ -96,6 +96,15 @@ def lookup_property(address: str) -> Dict[str, Any]:
     hoa_dict = rec.get("hoa") or {}
     hoa = int(hoa_dict.get("fee") or 0)
 
+    # Property tax — RentCast returns propertyTaxes as a dict keyed by year
+    # like {"2024": {"total": 4500}, "2023": {"total": 4200}}. Take most recent.
+    annual_taxes = 0
+    tax_data = rec.get("propertyTaxes") or {}
+    if isinstance(tax_data, dict) and tax_data:
+        latest_year = max(tax_data.keys())
+        latest = tax_data.get(latest_year) or {}
+        annual_taxes = int(latest.get("total") or 0)
+
     return {
         "found": True,
         "error": None,
@@ -110,6 +119,7 @@ def lookup_property(address: str) -> Dict[str, Any]:
         "lot_size": int(rec.get("lotSize") or 0),
         "pool": pool,
         "hoa": hoa,
+        "annual_taxes": annual_taxes,
         "last_sale_price": rec.get("lastSalePrice"),
         "last_sale_date": rec.get("lastSaleDate"),
         "raw": rec,

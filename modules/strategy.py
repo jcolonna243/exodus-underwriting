@@ -24,38 +24,55 @@ import math
 
 
 # ============================================================================
-# DEFAULTS — same values as v3 Excel's Section 4 / 4B / Repair Rates tabs
+# DEFAULTS — admin-editable financial parameters
 # ============================================================================
 DEFAULTS = {
-    # Financing (Underwriting!B41-B49)
-    "ltv": 0.90,
-    "interest_rate": 0.11,
-    "points": 0.015,
+    # Hard money loan model (Loan-to-Cost, capped by ARV)
+    "ltc": 0.90,                          # loan = ltc × purchase (capped below)
+    "arv_loan_cap": 0.75,                 # loan ≤ this × ARV
+    "interest_rate": 0.10,                # 10% annual
+    "origination_flat": 999,              # $999 flat origination fee
+    "origination_pct": 0.015,             # 1.5% of loan, points-equivalent
     "loan_duration_months": 6,
+    # Legacy keys kept for backward-compat with saved deals / settings.
+    # New code should NOT read these — use the strategy-specific keys below.
+    "ltv": 0.90,
+    "points": 0.015,
     "purchase_closing_pct": 0.04,
     "sale_closing_pct": 0.07,
+    # Strategy-specific closing percentages (AB = our side at purchase,
+    # BC = our side at sale)
+    "regular_ab_pct": 0.04,               # Standard purchase, financed
+    "short_sale_ab_pct": 0.02,            # Bank covers seller's portion
+    "dc_ab_pct": 0.04,                    # Includes ~1% transactional funding
+    "rehab_bc_pct": 0.07,                 # FL retail: 5.5% comm + 0.7% doc stamps + misc
+    "dc_bc_pct": 0.02,                    # No commission, just doc stamps + closing
+    # Insurance (lender-required, scales with loan)
+    "insurance_per_100k_monthly": 244,    # $244/mo per $100k of loan
+    "insurance_bracket": 25_000,          # round loan to this for insurance calc
+    # Targets and thresholds
     "target_roi": 0.10,
     "default_assignment_fee": 15_000,
     "min_profit_threshold": 30_000,
-    # Novation (Underwriting!E41-E44)
+    # Novation
     "novation_retail_costs_pct": 0.09,
     "novation_holding_costs": 3_000,
     "novation_min_floor": 10_000,
     "novation_preferred_target": 30_000,
-    # Strategy thresholds (encoded in v3 strategy formula)
-    "rehab_zone_floor": 50_000,           # profit ≥ this → rehab-zone band
-    "wholesale_only_floor": 30_000,       # profit ≥ this → at least wholesale viable
-    "gap_marginal_threshold": 50_000,     # gap > this → marginal
-    "gap_too_wide_threshold": 70_000,     # gap > this → forces pivot
-    "scope_light_max": 20_000,            # rehab ≤ this → Light scope
-    "scope_heavy_min": 80_000,            # rehab > this → Heavy scope
-    "dc_assignment_fee_threshold": 25_000,  # fee ≥ this → DC required
-    "novation_rehab_cap": 20_000,         # novation requires rehab ≤ this
-    "mls_rehab_pct_of_arv": 0.08,         # MLS requires rehab ≤ this % of ARV
+    # Strategy thresholds
+    "rehab_zone_floor": 50_000,
+    "wholesale_only_floor": 30_000,
+    "gap_marginal_threshold": 50_000,
+    "gap_too_wide_threshold": 70_000,
+    "scope_light_max": 20_000,
+    "scope_heavy_min": 80_000,
+    "dc_assignment_fee_threshold": 25_000,
+    "novation_rehab_cap": 20_000,
+    "mls_rehab_pct_of_arv": 0.08,
     "mls_min_commission": 8_000,
     "mls_commission_rate": 0.03,
-    "fat_fee_buyer_floor": 50_000,        # end buyer should keep at least this
-    "fat_fee_target_pct": 0.25,           # fat fee = this % of projected profit
+    "fat_fee_buyer_floor": 50_000,
+    "fat_fee_target_pct": 0.25,
 }
 
 
@@ -86,12 +103,18 @@ REPAIR_RATES = {
     "shutter_replace_each": 150,
     # Flat
     "kitchen_full_remodel": 12_000,
+    "kitchen_light_update": 5_000,           # NEW: refresh vs full remodel
     "bathroom_full_remodel": 6_000,
+    "bathroom_half": 1_500,                  # NEW: per half-bath
     "electrical_standard_misc": 1_500,
     "electrical_breaker_box": 2_500,
     "electrical_full": 4_000,
     "landscaping": 1_500,
     "appliances": 6_000,
+    "lighting_all_new": 1_500,               # NEW
+    "hot_water_tank": 1_000,                 # NEW
+    "cosmetic_demo": 1_500,                  # NEW
+    "final_cleaning": 350,                   # NEW
     # Pool
     "pool_replace_motor": 800,
     "pool_replace_pump": 1_500,
@@ -187,13 +210,21 @@ def rehab_subtotal(rehab: Dict[str, Any], sqft: int, baths: float, pool: bool) -
         tons = math.ceil(sqft / 500) if sqft > 0 else 0
         total += tons * r["ac_per_ton"]
 
-    # Kitchen
-    if get("kitchen").get("include"):
-        total += r["kitchen_full_remodel"]
+    # Kitchen — full or light update
+    kit = get("kitchen")
+    if kit.get("include"):
+        kind = kit.get("type", "Full remodel")
+        total += r["kitchen_light_update"] if kind == "Light update" else r["kitchen_full_remodel"]
 
-    # Bathrooms
+    # Bathrooms (full count)
     if get("bathrooms").get("include"):
         total += baths * r["bathroom_full_remodel"]
+
+    # Half bathrooms (count)
+    half = get("half_bathrooms")
+    if half.get("include"):
+        qty = half.get("qty", 0) or 0
+        total += qty * r["bathroom_half"]
 
     # Interior Paint
     ip = get("interior_paint")
@@ -252,6 +283,22 @@ def rehab_subtotal(rehab: Dict[str, Any], sqft: int, baths: float, pool: bool) -
     if get("appliances").get("include"):
         total += r["appliances"]
 
+    # Lighting refresh
+    if get("lighting").get("include"):
+        total += r["lighting_all_new"]
+
+    # Hot water tank
+    if get("hot_water_tank").get("include"):
+        total += r["hot_water_tank"]
+
+    # Cosmetic demo (pre-rehab cleanup)
+    if get("cosmetic_demo").get("include"):
+        total += r["cosmetic_demo"]
+
+    # Final cleaning
+    if get("final_cleaning").get("include"):
+        total += r["final_cleaning"]
+
     # Pool (only if subject has pool)
     pool_r = get("pool")
     if pool_r.get("include") and pool:
@@ -307,12 +354,22 @@ def rehab_breakdown(rehab: Dict[str, Any], sqft: int, baths: float, pool: bool) 
         items.append((f"A/C ({tons} ton{'s' if tons != 1 else ''} × ${r['ac_per_ton']:,})",
                       tons * r["ac_per_ton"]))
 
-    if get("kitchen").get("include"):
-        items.append(("Kitchen (full remodel)", r["kitchen_full_remodel"]))
+    kit = get("kitchen")
+    if kit.get("include"):
+        kind = kit.get("type", "Full remodel")
+        if kind == "Light update":
+            items.append(("Kitchen (light update)", r["kitchen_light_update"]))
+        else:
+            items.append(("Kitchen (full remodel)", r["kitchen_full_remodel"]))
 
     if get("bathrooms").get("include"):
         items.append((f"Bathrooms ({baths:g} bath{'s' if baths != 1 else ''} × ${r['bathroom_full_remodel']:,})",
                       baths * r["bathroom_full_remodel"]))
+
+    half = get("half_bathrooms")
+    if half.get("include"):
+        qty = half.get("qty", 0) or 0
+        items.append((f"Half Baths ({qty} × ${r['bathroom_half']:,})", qty * r["bathroom_half"]))
 
     ip = get("interior_paint")
     if ip.get("include"):
@@ -357,6 +414,18 @@ def rehab_breakdown(rehab: Dict[str, Any], sqft: int, baths: float, pool: bool) 
     if get("appliances").get("include"):
         items.append(("Appliances", r["appliances"]))
 
+    if get("lighting").get("include"):
+        items.append(("Lighting (all new)", r["lighting_all_new"]))
+
+    if get("hot_water_tank").get("include"):
+        items.append(("Hot water tank", r["hot_water_tank"]))
+
+    if get("cosmetic_demo").get("include"):
+        items.append(("Cosmetic demo", r["cosmetic_demo"]))
+
+    if get("final_cleaning").get("include"):
+        items.append(("Final cleaning", r["final_cleaning"]))
+
     pool_r = get("pool")
     if pool_r.get("include") and pool:
         t = pool_r.get("type", "Replace Motor")
@@ -375,40 +444,98 @@ def rehab_breakdown(rehab: Dict[str, Any], sqft: int, baths: float, pool: bool) 
 
 
 # ============================================================================
-# HOLDING COSTS
+# LOAN, COM, INSURANCE — hard money model (LTC capped by ARV)
 # ============================================================================
-def monthly_holding(pool: bool, hoa: float = 0, maintenance: float = 0) -> float:
+def compute_loan(purchase: float, arv: float, ltc: float, arv_cap: float) -> float:
+    """Lender funds min(ltc × purchase, arv_cap × ARV). Rehab is draws (not in loan)."""
+    if purchase <= 0:
+        return 0
+    return min(ltc * purchase, arv_cap * arv if arv > 0 else ltc * purchase)
+
+
+def compute_com(loan: float, origination_flat: float, origination_pct: float,
+                interest_rate: float, months: float) -> float:
+    """Cost of Money in DOLLARS (origination + interest)."""
+    if loan <= 0:
+        return 0
+    origination = origination_flat + origination_pct * loan
+    interest = loan * interest_rate * (months / 12.0)
+    return origination + interest
+
+
+def compute_insurance_monthly(loan: float, per_100k: float, bracket: float) -> float:
+    """Insurance per month, scaled by loan and rounded to nearest $bracket."""
+    if loan <= 0:
+        return 0
+    loan_rounded = round(loan / bracket) * bracket if bracket > 0 else loan
+    return per_100k * (loan_rounded / 100_000.0)
+
+
+# ============================================================================
+# HOLDING COSTS — now includes property tax + loan-based insurance
+# ============================================================================
+def monthly_holding(loan: float = 0, pool: bool = False, hoa: float = 0,
+                    annual_taxes: float = 0, maintenance: float = 0,
+                    insurance_per_100k: float = 244,
+                    insurance_bracket: float = 25_000) -> float:
+    """Updated monthly holding. Insurance scales with loan amount."""
     r = get_repair_rates()
     water = r["water_with_pool"] if pool else r["water_no_pool"]
     electric = r["electric_with_pool"] if pool else r["electric_no_pool"]
-    insurance = r["insurance_vacant"]
-    return maintenance + water + electric + insurance + hoa
+    insurance = compute_insurance_monthly(loan, insurance_per_100k, insurance_bracket)
+    taxes_monthly = (annual_taxes or 0) / 12.0
+    return maintenance + water + electric + insurance + hoa + taxes_monthly
 
 
 # ============================================================================
-# MAO / PROFIT CALCULATIONS
+# MAO / PROFIT CALCULATIONS — LTC-based hard money
 # ============================================================================
-def cost_of_money_factor(ltv: float, rate: float, months: int, points: float) -> float:
-    """COM factor per $ of purchase price. Mirror of B61."""
-    return ltv * (rate * months / 12 + points)
-
-
-def cash_mao(
+def cash_mao_ltc(
     arv: float,
     rehab_total: float,
-    sale_closing_pct: float,
+    bc_pct: float,            # disposition-specific sale closing %
+    ab_pct: float,            # acquisition-specific purchase closing %
     holding_total: float,
     target_roi: float,
-    purchase_closing_pct: float,
-    com_factor: float,
+    ltc: float,
+    arv_cap: float,
+    origination_flat: float,
+    origination_pct: float,
+    interest_rate: float,
+    months: float,
 ) -> float:
-    """Mirror of Underwriting!B74. Maximum cash offer."""
+    """Max purchase price such that target ROI is achieved.
+
+    Loan = min(ltc × P, arv_cap × ARV). Two analytic cases:
+      Case 1 (cap doesn't bind): loan = ltc × P, COM grows with P
+      Case 2 (cap binds):        loan = arv_cap × ARV, COM is fixed
+    """
     if arv <= 0:
         return 0
-    sale_closing = arv * sale_closing_pct
-    numerator = arv / (1 + target_roi) - rehab_total - sale_closing - holding_total
-    denominator = 1 + purchase_closing_pct + com_factor
-    return numerator / denominator if denominator > 0 else 0
+    bc_costs = arv * bc_pct
+    target_tpc = arv / (1 + target_roi)
+    loan_cost_factor = origination_pct + interest_rate * (months / 12.0)
+    k = ltc * loan_cost_factor
+
+    # --- Case 1: loan = ltc × P ---
+    numer1 = target_tpc - rehab_total - bc_costs - holding_total - origination_flat
+    denom1 = 1 + ab_pct + k
+    p_case1 = numer1 / denom1 if denom1 > 0 else 0
+
+    # Case 1 is consistent if loan stays under cap:
+    #   ltc × p_case1 ≤ arv_cap × ARV   ↔   p_case1 ≤ (arv_cap / ltc) × ARV
+    cap_threshold = (arv_cap / ltc) * arv if ltc > 0 else float("inf")
+    if p_case1 <= cap_threshold:
+        return max(0, p_case1)
+
+    # --- Case 2: loan = arv_cap × ARV (fixed) ---
+    capped_loan = arv_cap * arv
+    com_fixed = compute_com(capped_loan, origination_flat, origination_pct,
+                            interest_rate, months)
+    numer2 = target_tpc - rehab_total - bc_costs - holding_total - com_fixed
+    denom2 = 1 + ab_pct
+    p_case2 = numer2 / denom2 if denom2 > 0 else 0
+    return max(0, p_case2)
 
 
 def round_down_to_1k(x: float) -> float:
@@ -419,17 +546,20 @@ def net_profit_at_price(
     purchase_price: float,
     arv: float,
     rehab_total: float,
-    sale_closing_pct: float,
+    bc_pct: float,
     holding_total: float,
-    purchase_closing_pct: float,
-    ltv: float,
-    com_factor: float,
+    ab_pct: float,
+    loan: float,
+    origination_flat: float,
+    origination_pct: float,
+    interest_rate: float,
+    months: float,
 ) -> tuple:
-    """Returns (net_profit, tpc, roi)."""
-    sale_closing = arv * sale_closing_pct
-    purchase_closing = purchase_price * purchase_closing_pct
-    com = ltv * purchase_price * com_factor  # mirrors v3 B85 (uses LTV again)
-    tpc = (purchase_price + purchase_closing + rehab_total + sale_closing
+    """Returns (net_profit, tpc, roi) using LTC-based COM in dollars."""
+    bc_costs = arv * bc_pct
+    ab_costs = purchase_price * ab_pct
+    com = compute_com(loan, origination_flat, origination_pct, interest_rate, months)
+    tpc = (purchase_price + ab_costs + rehab_total + bc_costs
            + holding_total + com)
     profit = arv - tpc
     roi = profit / tpc if tpc > 0 else 0
@@ -644,7 +774,7 @@ def offer_terms(
     if is_pass or is_mls:
         return {"walk_away": 0, "opening": 0, "stretch": 0}
 
-    if strategy == "Rehab":
+    if "Rehab" in strategy:  # plain "Rehab" or "Short Sale → Rehab"
         walk = cash_mao_value
     elif is_novation:
         walk = benchmark
@@ -711,6 +841,21 @@ def key_numbers_for(rec: Dict[str, Any], prop: Dict[str, Any]) -> List[tuple]:
         ]
 
     # Default: investor strategy — full Key Numbers
+    # When asking < MAO, show profit at asking AND profit at MAO
+    at_asking_profit = rec.get("net_profit_at_asking")
+    if at_asking_profit is not None:
+        return [
+            ("ARV", fmt_money(rec.get("arv", 0))),
+            ("Total Rehab", fmt_money(rec.get("rehab_total", 0))),
+            ("Net Profit at Asking", fmt_money(at_asking_profit)),
+            ("Net Profit at MAO", fmt_money(rec.get("net_profit_at_mao", 0))),
+            ("ROI at Asking", fmt_pct(rec.get("roi_at_asking", 0))),
+            ("Cash Offer (MAO)", fmt_money(rec.get("cash_offer", 0))),
+            ("Wholesale Offer", fmt_money(rec.get("wholesale_offer", 0))),
+            ("Deal Status", rec.get("deal_status", "—")),
+        ]
+
+    # asking ≥ MAO — show standard 8 metrics
     return [
         ("ARV", fmt_money(rec.get("arv", 0))),
         ("Total Rehab", fmt_money(rec.get("rehab_total", 0))),
@@ -744,6 +889,15 @@ def rationale_text(strategy: str, ctx: Dict) -> str:
         return (f"Gap of {fmt_money(p['gap'])} between asking and Cash MAO is too wide for rehab — "
                 f"even though math at MAO works, seller likely won't accept. Pivoting to wholesale: "
                 f"keep your skin small, let end buyer take the risk.")
+    if strategy == "Short Sale → Rehab":
+        ask_profit = p.get("net_profit_at_asking")
+        if ask_profit is not None and p.get("asking"):
+            return (f"Short sale acquisition: asking {fmt_money(p['asking'])} below "
+                    f"Cash MAO {fmt_money(p['cash_offer'])}, projected profit "
+                    f"{fmt_money(ask_profit)} after rehab. Lower AB closing (2%) "
+                    f"helps margin.")
+        return (f"Short sale acquisition with light/moderate rehab. "
+                f"Net profit {fmt_money(p['net_profit'])} at MAO.")
     if "Short Sale" in strategy:
         return (f"Distress signals present (equity {fmt_money(p['equity'])}, status {p['payment_status']}). "
                 f"Negotiate the bank down, exit via DC.")
@@ -757,6 +911,13 @@ def rationale_text(strategy: str, ctx: Dict) -> str:
                 f"{fmt_money(p['rehab_total'])} supports retail listing; projected novation profit "
                 f"{fmt_money(p['nov_profit'])}.{marginal_note}")
     if strategy == "Rehab":
+        # If asking < MAO, surface the at-asking economics
+        ask_profit = p.get("net_profit_at_asking")
+        if ask_profit is not None and p.get("asking"):
+            return (f"Asking {fmt_money(p['asking'])} is "
+                    f"{fmt_money(p['cash_offer'] - p['asking'])} below Cash MAO "
+                    f"{fmt_money(p['cash_offer'])} — excellent margin. At asking, "
+                    f"projected profit {fmt_money(ask_profit)}; scope {p['eff_scope']}.")
         return (f"Net profit {fmt_money(p['net_profit'])} clears "
                 f"${p['params']['rehab_zone_floor']:,.0f} rehab threshold; scope {p['eff_scope']}; "
                 f"gap {fmt_money(p['gap'])} within range.")
@@ -778,6 +939,9 @@ def disposition_text(strategy: str) -> str:
         return "Pass — educate seller on market value; circle back if asking drops."
     if strategy == "MLS Referral":
         return "Refer to in-house realtor; list on MLS at retail; collect listing commission on close."
+    if strategy == "Short Sale → Rehab":
+        return ("Negotiate short sale with lender; close AB on approved price; "
+                "rehab to ARV; list retail.")
     if strategy == "Rehab":
         return "Take down, rehab to ARV, list retail."
     if strategy == "Novation — Marginal":
@@ -820,6 +984,15 @@ ACTION_ITEMS = {
         "Line up transactional funding for double close.",
         "Identify 2-3 likely cash buyers before listing.",
         "Set 90-day reminder if short sale stalls.",
+    ],
+    "Short Sale → Rehab": [
+        "Pull current payoff statement from 1st lender.",
+        "Confirm seller has hardship documentation ready.",
+        "Order BPO comp package for lender negotiation.",
+        "Confirm contractor availability and lock pricing.",
+        "Line up rehab financing (hard money + draws).",
+        "Order inspection during inspection period.",
+        "Plan 4-month rehab timeline contingent on SS approval.",
     ],
     "Novation": [
         "Record Memorandum of Agreement at Miami-Dade clerk.",
@@ -888,17 +1061,42 @@ def contract_terms(strategy: str) -> Dict[str, Any]:
 # ============================================================================
 # THE TOP-LEVEL COMPUTE FUNCTION
 # ============================================================================
+def closing_pcts_for(acquisition_type: str, strategy: str, params: Dict[str, Any]) -> tuple:
+    """Return (ab_pct, bc_pct) for the given combination.
+
+    AB% comes from acquisition type (Regular vs Short Sale).
+    BC% comes from disposition (Rehab/Retail 7%, DC 2%, Novation N/A, etc.)."""
+    is_short = (acquisition_type or "").lower().startswith("short")
+    # AB
+    if is_short:
+        ab = params.get("short_sale_ab_pct", 0.02)
+    elif "Double Close" in strategy:
+        ab = params.get("dc_ab_pct", params.get("regular_ab_pct", 0.04))
+    elif "Assignment" in strategy:
+        ab = 0.0  # we never close
+    else:
+        ab = params.get("regular_ab_pct", 0.04)
+    # BC
+    if "Double Close" in strategy:
+        bc = params.get("dc_bc_pct", 0.02)
+    elif "Assignment" in strategy:
+        bc = 0.0
+    elif "MLS" in strategy or "Pass" in strategy or strategy.startswith("NO-GO"):
+        bc = 0.0  # we don't sell — N/A
+    else:  # Rehab, Novation, Short Sale (default exit)
+        bc = params.get("rehab_bc_pct", 0.07)
+    return ab, bc
+
+
 def compute_recommendation(inputs: Dict[str, Any]) -> Dict[str, Any]:
-    """Top-level orchestrator. Given a complete inputs dict, returns a complete
-    recommendation dict.
+    """Top-level orchestrator with LTC hard-money math + profit-at-asking logic.
 
     Required input keys:
-      property: {address, city, state, zip, beds, baths, sqft, year, pool, hoa, asking}
-      arv: float (the "ARV to use" — user override)
-      rehab: dict of toggles (see rehab_subtotal docstring)
-      seller: {mtg1, mtg2, other_liens, payment_status, required_net, timeline,
-               reason, occupancy, condition_confirmed, buyer_demand, assignable,
-               buyer_prefers_dc, open_to_mls}
+      property: {address, city, state, zip, beds, baths, sqft, year, pool, hoa,
+                 asking, acquisition_type, annual_taxes}
+      arv: float
+      rehab: dict of toggles
+      seller: {mtg1, mtg2, other_liens, payment_status, required_net, ...}
       params: optional dict to override DEFAULTS
     """
     params = {**get_strategy_defaults(), **(inputs.get("params") or {})}
@@ -912,40 +1110,90 @@ def compute_recommendation(inputs: Dict[str, Any]) -> Dict[str, Any]:
     pool = (prop.get("pool", "No") == "Yes")
     asking = prop.get("asking", 0) or 0
     hoa = prop.get("hoa", 0) or 0
+    annual_taxes = prop.get("annual_taxes", 0) or 0
+    acquisition_type = (prop.get("acquisition_type") or "Regular")
 
     # Rehab
     rehab_sub = rehab_subtotal(rehab, sqft, baths, pool)
     rehab_total = rehab_with_contingency(rehab_sub)
 
-    # Holding
-    monthly_hold = monthly_holding(pool, hoa)
-    duration = params["loan_duration_months"]
+    # Loan / financing params
+    ltc = params.get("ltc", params.get("ltv", 0.90))
+    arv_cap = params.get("arv_loan_cap", 0.75)
+    orig_flat = params.get("origination_flat", 999)
+    orig_pct = params.get("origination_pct", params.get("points", 0.015))
+    rate = params.get("interest_rate", 0.10)
+    duration = params.get("loan_duration_months", 6)
+    ins_per_100k = params.get("insurance_per_100k_monthly", 244)
+    ins_bracket = params.get("insurance_bracket", 25_000)
+
+    # AB% / BC% defaults for the MAO calculation (assume Rehab disposition)
+    ab_default = params.get("short_sale_ab_pct", 0.02) if acquisition_type.lower().startswith("short") else params.get("regular_ab_pct", 0.04)
+    bc_default = params.get("rehab_bc_pct", 0.07)
+
+    # MAO calc has chicken-and-egg with holding (insurance depends on loan).
+    # Iterate 3x to converge.
+    cash_mao_value = arv * 0.7  # initial guess
+    for _ in range(3):
+        loan_guess = compute_loan(cash_mao_value, arv, ltc, arv_cap)
+        monthly_hold = monthly_holding(loan_guess, pool, hoa, annual_taxes,
+                                        insurance_per_100k=ins_per_100k,
+                                        insurance_bracket=ins_bracket)
+        total_holding = monthly_hold * duration
+        cash_mao_value = cash_mao_ltc(
+            arv, rehab_total, bc_default, ab_default, total_holding,
+            params.get("target_roi", 0.10), ltc, arv_cap,
+            orig_flat, orig_pct, rate, duration,
+        )
+
+    cash_offer = round_down_to_1k(max(0, cash_mao_value))
+    wholesale_offer = round_down_to_1k(max(0, cash_mao_value - params.get("default_assignment_fee", 15_000)))
+
+    # Final loan + holding at the resolved cash_offer
+    final_loan = compute_loan(cash_offer, arv, ltc, arv_cap)
+    monthly_hold = monthly_holding(final_loan, pool, hoa, annual_taxes,
+                                    insurance_per_100k=ins_per_100k,
+                                    insurance_bracket=ins_bracket)
     total_holding = monthly_hold * duration
 
-    # COM factor + Cash MAO
-    com = cost_of_money_factor(
-        params["ltv"], params["interest_rate"], duration, params["points"]
-    )
-    raw_cash_mao = cash_mao(
-        arv, rehab_total, params["sale_closing_pct"], total_holding,
-        params["target_roi"], params["purchase_closing_pct"], com,
-    )
-    cash_offer = round_down_to_1k(max(0, raw_cash_mao))
-    wholesale_mao_raw = raw_cash_mao - params["default_assignment_fee"]
-    wholesale_offer = round_down_to_1k(max(0, wholesale_mao_raw))
-
-    # Net profit at Cash MAO
-    net_profit, tpc, roi = net_profit_at_price(
-        cash_offer, arv, rehab_total, params["sale_closing_pct"],
-        total_holding, params["purchase_closing_pct"], params["ltv"], com,
+    # Net profit AT MAO (conservative ceiling)
+    net_profit_at_mao, tpc_at_mao, roi_at_mao = net_profit_at_price(
+        cash_offer, arv, rehab_total, bc_default, total_holding,
+        ab_default, final_loan, orig_flat, orig_pct, rate, duration,
     )
 
-    # Individual cost components for pro-forma display
-    purchase_closing_costs = cash_offer * params["purchase_closing_pct"]
-    sale_closing_costs = arv * params["sale_closing_pct"]
-    cost_of_money_amount = params["ltv"] * cash_offer * com
+    # Net profit AT ASKING (realistic when asking < MAO)
+    if asking > 0 and asking < cash_offer:
+        ask_loan = compute_loan(asking, arv, ltc, arv_cap)
+        monthly_hold_ask = monthly_holding(ask_loan, pool, hoa, annual_taxes,
+                                            insurance_per_100k=ins_per_100k,
+                                            insurance_bracket=ins_bracket)
+        total_holding_ask = monthly_hold_ask * duration
+        net_profit_at_asking, tpc_at_asking, roi_at_asking = net_profit_at_price(
+            asking, arv, rehab_total, bc_default, total_holding_ask,
+            ab_default, ask_loan, orig_flat, orig_pct, rate, duration,
+        )
+        # Use the realistic numbers for the decision
+        net_profit = net_profit_at_asking
+        tpc = tpc_at_asking
+        roi = roi_at_asking
+        likely_purchase = asking
+        likely_loan = ask_loan
+        likely_monthly_holding = monthly_hold_ask
+        likely_total_holding = total_holding_ask
+    else:
+        net_profit_at_asking = None  # not applicable
+        tpc_at_asking = None
+        roi_at_asking = None
+        net_profit = net_profit_at_mao
+        tpc = tpc_at_mao
+        roi = roi_at_mao
+        likely_purchase = cash_offer
+        likely_loan = final_loan
+        likely_monthly_holding = monthly_hold
+        likely_total_holding = total_holding
 
-    # Deal Status
+    # Deal status uses REALISTIC profit
     status, status_reason = deal_status(net_profit, roi, params)
 
     # Seller inputs
@@ -961,13 +1209,14 @@ def compute_recommendation(inputs: Dict[str, Any]) -> Dict[str, Any]:
 
     equity = equity_position(arv, mtg1 + mtg2, liens)
     distress = distress_flag(equity, payment_status)
+    is_short_sale_acq = acquisition_type.lower().startswith("short")
 
     # Gap analysis
     gap = (asking - cash_offer) if asking > 0 else 0
     gap_cat = gap_category(gap, params)
     nov_max_asking = novation_max_asking(arv, rehab_total, params)
 
-    # Scope, profit band
+    # Scope, profit band uses REALISTIC profit
     eff_scope = scope_severity(rehab_total, params)
     pb = profit_band(net_profit, params)
 
@@ -975,8 +1224,7 @@ def compute_recommendation(inputs: Dict[str, Any]) -> Dict[str, Any]:
     benchmark = required_net if required_net > 0 else asking
     nov_profit = novation_profit(
         arv, benchmark, rehab_total,
-        params["novation_retail_costs_pct"],
-        params["novation_holding_costs"],
+        params["novation_retail_costs_pct"], params["novation_holding_costs"],
     )
     nov_ok = novation_feasible(rehab_total, eff_scope, nov_profit, params)
 
@@ -984,12 +1232,37 @@ def compute_recommendation(inputs: Dict[str, Any]) -> Dict[str, Any]:
     mls_comm = mls_commission(asking, arv, params["mls_commission_rate"])
     mls_ok = mls_feasible(rehab_total, arv, eff_scope, open_to_mls, mls_comm, params)
 
-    # Master strategy
-    strategy = decide_strategy(
-        pb, distress, asking, gap, nov_ok, nov_profit, mls_ok,
-        benchmark, wholesale_offer, eff_scope,
-        params["default_assignment_fee"], assignable, buyer_prefers_dc, params,
-    )
+    # Master strategy — when acquisition is Short Sale, route to short sale flow
+    if is_short_sale_acq:
+        # User explicitly chose short sale; pick best disposition
+        if eff_scope == "Heavy" or rehab_total > params.get("scope_heavy_min", 80_000):
+            strategy = "Short Sale → Wholesale (Double Close)"
+        elif pb == "NO-GO":
+            strategy = "Short Sale → Wholesale (Double Close)" if pb != "NO-GO" else (
+                "MLS Referral" if mls_ok else "NO-GO — Pass"
+            )
+        else:
+            # Light/moderate scope + clears profit floor → close + rehab + retail
+            strategy = "Short Sale → Rehab"
+    else:
+        strategy = decide_strategy(
+            pb, distress, asking, gap, nov_ok, nov_profit, mls_ok,
+            benchmark, wholesale_offer, eff_scope,
+            params["default_assignment_fee"], assignable, buyer_prefers_dc, params,
+        )
+
+    # Now recalculate pro-forma using strategy-specific closing %s
+    ab_strat, bc_strat = closing_pcts_for(acquisition_type, strategy, params)
+    purchase_closing_costs = likely_purchase * ab_strat
+    sale_closing_costs = arv * bc_strat
+    cost_of_money_amount = compute_com(likely_loan, orig_flat, orig_pct, rate, duration)
+
+    # Refresh net_profit with strategy-specific closing %s for accurate pro-forma
+    if "Pass" not in strategy and not strategy.startswith("NO-GO") and "MLS" not in strategy:
+        net_profit, tpc, roi = net_profit_at_price(
+            likely_purchase, arv, rehab_total, bc_strat, likely_total_holding,
+            ab_strat, likely_loan, orig_flat, orig_pct, rate, duration,
+        )
 
     # Offer terms
     terms = offer_terms(strategy, cash_offer, wholesale_offer, benchmark,
@@ -1008,7 +1281,7 @@ def compute_recommendation(inputs: Dict[str, Any]) -> Dict[str, Any]:
         recommended_fee = None
         fee_note = ""
 
-    # Build context for rationale text
+    # Rationale context
     rationale_ctx = {
         "params": params, "net_profit": net_profit, "rehab_total": rehab_total,
         "asking": asking, "gap": gap, "cash_offer": cash_offer,
@@ -1017,6 +1290,8 @@ def compute_recommendation(inputs: Dict[str, Any]) -> Dict[str, Any]:
         "benchmark": benchmark, "nov_profit": nov_profit,
         "eff_scope": eff_scope, "assignment_fee": params["default_assignment_fee"],
         "target_fat_fee": recommended_fee or params["default_assignment_fee"],
+        "net_profit_at_mao": net_profit_at_mao,
+        "net_profit_at_asking": net_profit_at_asking,
     }
 
     return {
@@ -1034,13 +1309,13 @@ def compute_recommendation(inputs: Dict[str, Any]) -> Dict[str, Any]:
         "target_assignment_fee": recommended_fee,
         "fat_fee_note": fee_note,
 
-        # Snapshot
+        # Snapshot — uses REALISTIC numbers (at asking when asking < MAO)
         "arv": arv,
         "asking": asking,
         "rehab_total": rehab_total,
         "rehab_subtotal": rehab_sub,
-        "total_holding": total_holding,
-        "monthly_holding": monthly_hold,
+        "total_holding": likely_total_holding,
+        "monthly_holding": likely_monthly_holding,
         "total_project_cost": tpc,
         "net_profit": net_profit,
         "roi": roi,
@@ -1050,16 +1325,33 @@ def compute_recommendation(inputs: Dict[str, Any]) -> Dict[str, Any]:
         "deal_status_reason": status_reason,
         "mls_commission_estimate": mls_comm,
 
-        # Pro-forma line items
+        # Both views (for Key Numbers display)
+        "net_profit_at_mao": net_profit_at_mao,
+        "net_profit_at_asking": net_profit_at_asking,
+        "tpc_at_mao": tpc_at_mao,
+        "tpc_at_asking": tpc_at_asking,
+        "roi_at_mao": roi_at_mao,
+        "roi_at_asking": roi_at_asking,
+        "likely_purchase_price": likely_purchase,
+        "likely_loan": likely_loan,
+
+        # Pro-forma line items (strategy-specific %)
         "purchase_closing_costs": purchase_closing_costs,
         "sale_closing_costs": sale_closing_costs,
         "cost_of_money": cost_of_money_amount,
-        "purchase_closing_pct": params["purchase_closing_pct"],
-        "sale_closing_pct": params["sale_closing_pct"],
-        "ltv": params["ltv"],
-        "loan_duration_months": params["loan_duration_months"],
-        "interest_rate": params["interest_rate"],
-        "points": params["points"],
+        "purchase_closing_pct": ab_strat,
+        "sale_closing_pct": bc_strat,
+        "annual_taxes": annual_taxes,
+        "monthly_taxes": annual_taxes / 12.0 if annual_taxes else 0,
+        "monthly_insurance": compute_insurance_monthly(likely_loan, ins_per_100k, ins_bracket),
+        "ltc": ltc,
+        "loan_duration_months": duration,
+        "interest_rate": rate,
+        "origination_flat": orig_flat,
+        "origination_pct": orig_pct,
+
+        # Acquisition / strategy meta
+        "acquisition_type": acquisition_type,
 
         # Diagnostics
         "equity": equity,

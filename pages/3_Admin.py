@@ -126,13 +126,35 @@ with tab_repair:
         st.markdown("**Flat amounts**")
         c1, c2, c3 = st.columns(3)
         new_rates["kitchen_full_remodel"] = c1.number_input(
-            "Kitchen full remodel",
+            "Kitchen — Full remodel",
             value=int(live["kitchen_full_remodel"]), step=500)
-        new_rates["bathroom_full_remodel"] = c2.number_input(
-            "Bathroom full remodel (per bath)",
+        new_rates["kitchen_light_update"] = c2.number_input(
+            "Kitchen — Light update",
+            value=int(live.get("kitchen_light_update", 5_000)), step=500)
+        new_rates["bathroom_full_remodel"] = c3.number_input(
+            "Bath — Full (per bath)",
             value=int(live["bathroom_full_remodel"]), step=500)
-        new_rates["appliances"] = c3.number_input(
+
+        c1, c2, c3 = st.columns(3)
+        new_rates["bathroom_half"] = c1.number_input(
+            "Bath — Half (per half-bath)",
+            value=int(live.get("bathroom_half", 1_500)), step=100)
+        new_rates["appliances"] = c2.number_input(
             "Appliances", value=int(live["appliances"]), step=500)
+        new_rates["lighting_all_new"] = c3.number_input(
+            "Lighting (all new)",
+            value=int(live.get("lighting_all_new", 1_500)), step=100)
+
+        c1, c2, c3 = st.columns(3)
+        new_rates["hot_water_tank"] = c1.number_input(
+            "Hot water tank",
+            value=int(live.get("hot_water_tank", 1_000)), step=100)
+        new_rates["cosmetic_demo"] = c2.number_input(
+            "Cosmetic demo",
+            value=int(live.get("cosmetic_demo", 1_500)), step=100)
+        new_rates["final_cleaning"] = c3.number_input(
+            "Final cleaning",
+            value=int(live.get("final_cleaning", 350)), step=50)
 
         c1, c2, c3 = st.columns(3)
         new_rates["electrical_standard_misc"] = c1.number_input(
@@ -185,9 +207,8 @@ with tab_repair:
             "Electric — With pool ($/mo)",
             value=int(live["electric_with_pool"]), step=10)
 
-        new_rates["insurance_vacant"] = st.number_input(
-            "Insurance — Vacant ($/mo)",
-            value=int(live["insurance_vacant"]), step=50)
+        st.caption("Insurance is no longer a flat monthly cost — it's calculated "
+                   "from the loan amount on the **Financing & Closing** tab.")
 
         st.markdown("---")
         col_save, col_reset = st.columns([3, 1])
@@ -304,30 +325,63 @@ with tab_fin:
 
     with st.form("financing_form"):
         new_fin = {}
-        st.markdown("**Loan parameters**")
+        st.markdown("**Hard money loan (LTC model)**")
         c1, c2, c3 = st.columns(3)
-        new_fin["ltv"] = c1.number_input(
-            "LTV (loan-to-value)", value=float(live["ltv"]),
-            min_value=0.0, max_value=1.0, step=0.05, format="%.2f")
-        new_fin["interest_rate"] = c2.number_input(
+        new_fin["ltc"] = c1.number_input(
+            "LTC (loan-to-cost)", value=float(live.get("ltc", live.get("ltv", 0.90))),
+            min_value=0.0, max_value=1.0, step=0.05, format="%.2f",
+            help="Loan = LTC × purchase price, capped by ARV ratio below")
+        new_fin["arv_loan_cap"] = c2.number_input(
+            "ARV loan cap", value=float(live.get("arv_loan_cap", 0.75)),
+            min_value=0.0, max_value=1.0, step=0.05, format="%.2f",
+            help="Loan cannot exceed this × ARV")
+        new_fin["interest_rate"] = c3.number_input(
             "Interest rate (annual)", value=float(live["interest_rate"]),
             min_value=0.0, max_value=0.5, step=0.005, format="%.3f")
-        new_fin["points"] = c3.number_input(
-            "Points", value=float(live["points"]),
+
+        c1, c2, c3 = st.columns(3)
+        new_fin["origination_flat"] = c1.number_input(
+            "Origination flat fee ($)", value=int(live.get("origination_flat", 999)),
+            min_value=0, step=50)
+        new_fin["origination_pct"] = c2.number_input(
+            "Origination % (points)", value=float(live.get("origination_pct", live.get("points", 0.015))),
             min_value=0.0, max_value=0.1, step=0.005, format="%.3f")
-        new_fin["loan_duration_months"] = st.number_input(
+        new_fin["loan_duration_months"] = c3.number_input(
             "Loan duration (months)", value=int(live["loan_duration_months"]),
             min_value=1, max_value=24, step=1)
 
         st.markdown("---")
-        st.markdown("**Closing cost percentages**")
+        st.markdown("**Strategy-specific closing percentages**")
+        st.caption("AB = our share at purchase. BC = our share at sale. The engine "
+                   "picks (AB, BC) automatically from acquisition type + disposition.")
+        c1, c2, c3 = st.columns(3)
+        new_fin["regular_ab_pct"] = c1.number_input(
+            "AB — Regular purchase", value=float(live.get("regular_ab_pct", 0.04)),
+            min_value=0.0, max_value=0.10, step=0.005, format="%.3f")
+        new_fin["short_sale_ab_pct"] = c2.number_input(
+            "AB — Short sale", value=float(live.get("short_sale_ab_pct", 0.02)),
+            min_value=0.0, max_value=0.10, step=0.005, format="%.3f")
+        new_fin["dc_ab_pct"] = c3.number_input(
+            "AB — Double Close", value=float(live.get("dc_ab_pct", 0.04)),
+            min_value=0.0, max_value=0.10, step=0.005, format="%.3f")
+
         c1, c2 = st.columns(2)
-        new_fin["purchase_closing_pct"] = c1.number_input(
-            "AB closing (purchase) %", value=float(live["purchase_closing_pct"]),
-            min_value=0.0, max_value=0.2, step=0.005, format="%.3f")
-        new_fin["sale_closing_pct"] = c2.number_input(
-            "BC closing (sale) %", value=float(live["sale_closing_pct"]),
-            min_value=0.0, max_value=0.2, step=0.005, format="%.3f")
+        new_fin["rehab_bc_pct"] = c1.number_input(
+            "BC — Rehab / Retail sale", value=float(live.get("rehab_bc_pct", 0.07)),
+            min_value=0.0, max_value=0.15, step=0.005, format="%.3f")
+        new_fin["dc_bc_pct"] = c2.number_input(
+            "BC — Wholesale DC sale", value=float(live.get("dc_bc_pct", 0.02)),
+            min_value=0.0, max_value=0.10, step=0.005, format="%.3f")
+
+        st.markdown("---")
+        st.markdown("**Insurance (lender-required, scales with loan)**")
+        c1, c2 = st.columns(2)
+        new_fin["insurance_per_100k_monthly"] = c1.number_input(
+            "$/mo per $100k of loan",
+            value=int(live.get("insurance_per_100k_monthly", 244)), step=10)
+        new_fin["insurance_bracket"] = c2.number_input(
+            "Round loan to nearest ($)",
+            value=int(live.get("insurance_bracket", 25_000)), step=5_000)
 
         st.markdown("---")
         st.markdown("**Targets**")
