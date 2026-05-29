@@ -1251,18 +1251,89 @@ def compute_recommendation(inputs: Dict[str, Any]) -> Dict[str, Any]:
             params["default_assignment_fee"], assignable, buyer_prefers_dc, params,
         )
 
-    # Now recalculate pro-forma using strategy-specific closing %s
+    # Strategy-specific closing %s for the actual recommendation
     ab_strat, bc_strat = closing_pcts_for(acquisition_type, strategy, params)
-    purchase_closing_costs = likely_purchase * ab_strat
-    sale_closing_costs = arv * bc_strat
-    cost_of_money_amount = compute_com(likely_loan, orig_flat, orig_pct, rate, duration)
 
-    # Refresh net_profit with strategy-specific closing %s for accurate pro-forma
-    if "Pass" not in strategy and not strategy.startswith("NO-GO") and "MLS" not in strategy:
+    is_pass_strat = ("Pass" in strategy or strategy.startswith("NO-GO"))
+    is_mls_strat = ("MLS" in strategy)
+    is_dc_strat = ("Double Close" in strategy)
+    is_assignment_strat = ("Assignment" in strategy)
+    is_novation_strat = ("Novation" in strategy)
+
+    # Initialize pro-forma display fields (may be overridden below)
+    pf_ab, pf_bc = ab_strat, bc_strat
+    cost_of_money_amount = compute_com(likely_loan, orig_flat, orig_pct, rate, duration)
+    proforma_kind = "rehab"  # rehab | dc | assignment | novation | pass
+
+    if is_pass_strat or is_mls_strat:
+        # Pass / MLS: pro-forma displays "what we would have made if we'd
+        # done it" using standard rehab-style closing %s rather than 0%.
+        pf_ab = (params.get("short_sale_ab_pct", 0.02)
+                 if is_short_sale_acq else params.get("regular_ab_pct", 0.04))
+        pf_bc = params.get("rehab_bc_pct", 0.07)
+        purchase_closing_costs = likely_purchase * pf_ab
+        sale_closing_costs = arv * pf_bc
+        proforma_kind = "pass"
+        # net_profit stays as already-calculated (uses rehab defaults)
+
+    elif is_assignment_strat:
+        # Wholesale Assignment: we never close. Profit = the assignment fee.
+        # Costs ≈ 0 (no AB, no BC, no holding, no COM).
+        purchase_closing_costs = 0
+        sale_closing_costs = 0
+        cost_of_money_amount = 0
+        likely_total_holding = 0
+        likely_monthly_holding = 0
+        # The fee is set after this block via target_fat_fee or default
+        # We'll set net_profit from the fee after that block runs
+        net_profit = params.get("default_assignment_fee", 15_000)
+        tpc = 0
+        roi = 0  # n/a since no capital deployed
+        proforma_kind = "assignment"
+
+    elif is_dc_strat:
+        # Double Close: we briefly close on the property and immediately
+        # resell to an end buyer at THEIR Cash MAO. We do NOT rehab.
+        # Profit = end buyer price − our purchase − DC closing − transactional.
+        end_buyer_price = cash_offer        # end buyer's max (Cash MAO)
+        our_buy_price = likely_purchase     # asking, or our wholesale willingness
+        purchase_closing_costs = our_buy_price * ab_strat
+        sale_closing_costs = end_buyer_price * bc_strat
+        # 1% transactional funding fee (replaces normal COM for same-day close)
+        transactional_fee = our_buy_price * 0.01
+        cost_of_money_amount = transactional_fee
+        # Same-day close → no holding period
+        likely_total_holding = 0
+        likely_monthly_holding = 0
+        tpc = (our_buy_price + purchase_closing_costs
+               + sale_closing_costs + transactional_fee)
+        net_profit = end_buyer_price - tpc
+        roi = net_profit / tpc if tpc > 0 else 0
+        proforma_kind = "dc"
+
+    elif is_novation_strat:
+        # Novation: we never take title. We list and capture proceeds above
+        # seller's net. Profit = ARV × (1 - retail_costs%) − benchmark − rehab − holding.
+        # (Already computed earlier as nov_profit.)
+        purchase_closing_costs = 0
+        sale_closing_costs = arv * params.get("novation_retail_costs_pct", 0.09)
+        cost_of_money_amount = 0
+        likely_total_holding = params.get("novation_holding_costs", 3_000)
+        likely_monthly_holding = likely_total_holding / max(duration, 1)
+        net_profit = nov_profit
+        tpc = benchmark + rehab_total + likely_total_holding
+        roi = net_profit / tpc if tpc > 0 else 0
+        proforma_kind = "novation"
+
+    else:
+        # Standard Rehab path (incl. Short Sale → Rehab)
+        purchase_closing_costs = likely_purchase * ab_strat
+        sale_closing_costs = arv * bc_strat
         net_profit, tpc, roi = net_profit_at_price(
             likely_purchase, arv, rehab_total, bc_strat, likely_total_holding,
             ab_strat, likely_loan, orig_flat, orig_pct, rate, duration,
         )
+        proforma_kind = "rehab"
 
     # Offer terms
     terms = offer_terms(strategy, cash_offer, wholesale_offer, benchmark,
@@ -1335,12 +1406,12 @@ def compute_recommendation(inputs: Dict[str, Any]) -> Dict[str, Any]:
         "likely_purchase_price": likely_purchase,
         "likely_loan": likely_loan,
 
-        # Pro-forma line items (strategy-specific %)
+        # Pro-forma line items (strategy-specific %, or 'what-if' for Pass/MLS)
         "purchase_closing_costs": purchase_closing_costs,
         "sale_closing_costs": sale_closing_costs,
         "cost_of_money": cost_of_money_amount,
-        "purchase_closing_pct": ab_strat,
-        "sale_closing_pct": bc_strat,
+        "purchase_closing_pct": pf_ab,
+        "sale_closing_pct": pf_bc,
         "annual_taxes": annual_taxes,
         "monthly_taxes": annual_taxes / 12.0 if annual_taxes else 0,
         "monthly_insurance": compute_insurance_monthly(likely_loan, ins_per_100k, ins_bracket),
@@ -1352,6 +1423,7 @@ def compute_recommendation(inputs: Dict[str, Any]) -> Dict[str, Any]:
 
         # Acquisition / strategy meta
         "acquisition_type": acquisition_type,
+        "proforma_kind": proforma_kind,  # "rehab" | "dc" | "assignment" | "novation" | "pass"
 
         # Diagnostics
         "equity": equity,

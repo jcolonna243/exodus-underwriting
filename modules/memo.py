@@ -128,11 +128,20 @@ def build_word_memo(prop: Dict, rec: Dict, seller: Dict, rehab_items: List = Non
         ("Est. MLS Commission", fmt_money(rec.get("mls_commission_estimate", 0))),
     ])
 
-    # === FINANCIAL PRO-FORMA (for Rehab and Double Close strategies) ===
+    # === FINANCIAL PRO-FORMA ===
+    # Shown for ALL strategies except MLS Referral (which has its own commission
+    # breakdown). For Pass strategies, it shows the math we walked away from so
+    # the team can see why and check if a small change would flip the decision.
     strat = rec.get("strategy", "")
-    if "Rehab" in strat or "Double Close" in strat:
-        _add_section(doc, "Financial Pro-Forma")
-        if "Rehab" in strat:
+    show_proforma = "MLS" not in strat
+    is_pass = "Pass" in strat or strat.startswith("NO-GO")
+    if show_proforma:
+        section_title = ("Financial Pro-Forma — Why We Passed"
+                         if is_pass else "Financial Pro-Forma")
+        _add_section(doc, section_title)
+        # For Pass strategies, default to Rehab-style math to show what the deal
+        # would look like if we'd taken it down.
+        if "Rehab" in strat or is_pass:
             # Rehab pro-forma: full acquisition, rehab, hold, retail sale
             purchase_price = rec.get("likely_purchase_price", rec.get("cash_offer", 0))
             purchase_label = ("Purchase Price (at Asking)"
@@ -169,36 +178,80 @@ def build_word_memo(prop: Dict, rec: Dict, seller: Dict, rehab_items: List = Non
                 ("  Net Profit", fmt_money(rec.get("net_profit", 0))),
                 ("  Projected ROI", fmt_pct(rec.get("roi", 0))),
             ]
-        else:
-            # Double Close pro-forma: same-day A→B and B→C
-            buy_price = rec.get("wholesale_offer", 0)
-            sell_price = rec.get("cash_offer", 0)
-            assignment_fee = rec.get("target_assignment_fee") or (sell_price - buy_price)
-            ab_closing_dc = buy_price * 0.02      # reduced on same-day close
-            bc_closing_dc = sell_price * 0.01     # minimal, same-day
-            transactional_fee = buy_price * 0.01  # 1-day bridge funding
-            total_dc_costs = ab_closing_dc + bc_closing_dc + transactional_fee
-            dc_net = assignment_fee - total_dc_costs
+        elif rec.get("proforma_kind") == "assignment":
+            # Wholesale Assignment — we never close, profit = the fee
             proforma_rows = [
-                ("SELL SIDE (B→C, same day)", ""),
-                ("  End-Buyer Price", fmt_money(sell_price)),
-                ("  Less: BC Closing Costs (~1%, same-day discount)",
-                 f"({fmt_money(bc_closing_dc)})"),
-                ("  Net from End Buyer", fmt_money(sell_price - bc_closing_dc)),
+                ("STRATEGY", "Assignment — no closings, no rehab on our side"),
                 ("", ""),
-                ("BUY SIDE (A→B)", ""),
-                ("  Your Contract Price (to Seller)", fmt_money(buy_price)),
-                ("  Plus: AB Closing Costs (~2%, same-day)",
-                 fmt_money(ab_closing_dc)),
-                ("  Plus: Transactional Funding (~1%, 24-hr bridge)",
-                 fmt_money(transactional_fee)),
-                ("  Total Your Costs",
-                 fmt_money(buy_price + ab_closing_dc + transactional_fee)),
+                ("ASSIGNMENT FEE", ""),
+                (f"  Spread we collect from end buyer",
+                 fmt_money(rec.get("target_assignment_fee") or rec.get("net_profit", 0))),
+                ("", ""),
+                ("OUR COSTS", ""),
+                ("  AB Closing (we don't close)", "$0"),
+                ("  BC Closing (end buyer pays)", "$0"),
+                ("  Holding / COM", "$0"),
                 ("", ""),
                 ("BOTTOM LINE", ""),
-                ("  Gross Spread (B − A)", fmt_money(sell_price - buy_price)),
-                ("  Less: All Closing & Funding Costs", f"({fmt_money(total_dc_costs)})"),
-                ("  Net Profit (to You)", fmt_money(dc_net)),
+                ("  Net Profit", fmt_money(rec.get("net_profit", 0))),
+            ]
+        elif rec.get("proforma_kind") == "novation":
+            # Novation — list at ARV; profit = ARV × (1 - retail%) − seller's net − rehab − holding
+            proforma_rows = [
+                ("STRATEGY", "Novation — control via agreement, sell at retail"),
+                ("", ""),
+                ("SALE SIDE (Retail listing)", ""),
+                ("  Expected Sale Price (ARV)", fmt_money(rec.get("arv", 0))),
+                (f"  Less: Retail Costs ({rec.get('sale_closing_pct', 0.09)*100:.1f}% of ARV)",
+                 f"({fmt_money(rec.get('sale_closing_costs', 0))})"),
+                ("", ""),
+                ("LESS: SELLER'S REQUIRED NET", ""),
+                ("  Benchmark (asking or required net)",
+                 f"({fmt_money(rec.get('benchmark', 0))})"),
+                ("", ""),
+                ("LESS: OUR COSTS", ""),
+                ("  Rehab (if any)", f"({fmt_money(rec.get('rehab_total', 0))})"),
+                ("  Novation Holding Costs",
+                 f"({fmt_money(rec.get('total_holding', 0))})"),
+                ("", ""),
+                ("BOTTOM LINE", ""),
+                ("  Net Profit", fmt_money(rec.get("net_profit", 0))),
+            ]
+        else:
+            # Double Close pro-forma — buy from seller, immediate resell to end buyer
+            # at THEIR Cash MAO. We do NOT do the rehab.
+            our_buy_price = rec.get("likely_purchase_price", rec.get("cash_offer", 0))
+            end_buyer_price = rec.get("cash_offer", 0)
+            ab_closing_dc = rec.get("purchase_closing_costs", 0)
+            bc_closing_dc = rec.get("sale_closing_costs", 0)
+            transactional_fee = rec.get("cost_of_money", 0)
+            ab_pct = rec.get("purchase_closing_pct", 0.04)
+            bc_pct = rec.get("sale_closing_pct", 0.02)
+            total_dc_costs = ab_closing_dc + bc_closing_dc + transactional_fee
+            proforma_rows = [
+                ("STRATEGY", "Double Close — buy and immediately resell; end buyer does the rehab"),
+                ("", ""),
+                ("SELL SIDE (B→C, same day)", ""),
+                ("  End-Buyer Price (their Cash MAO)", fmt_money(end_buyer_price)),
+                (f"  Less: BC Closing Costs ({bc_pct*100:.1f}%)",
+                 f"({fmt_money(bc_closing_dc)})"),
+                ("  Net from End Buyer", fmt_money(end_buyer_price - bc_closing_dc)),
+                ("", ""),
+                ("BUY SIDE (A→B)", ""),
+                ("  Our Contract Price (to Seller)", fmt_money(our_buy_price)),
+                (f"  Plus: AB Closing Costs ({ab_pct*100:.1f}%)",
+                 fmt_money(ab_closing_dc)),
+                ("  Plus: Transactional Funding (1%, same-day bridge)",
+                 fmt_money(transactional_fee)),
+                ("  Total Our Costs (out of pocket)",
+                 fmt_money(our_buy_price + ab_closing_dc + transactional_fee)),
+                ("", ""),
+                ("BOTTOM LINE", ""),
+                ("  Gross Spread (B − A)",
+                 fmt_money(end_buyer_price - our_buy_price)),
+                ("  Less: All Closing & Funding Costs",
+                 f"({fmt_money(total_dc_costs)})"),
+                ("  Net Profit", fmt_money(rec.get("net_profit", 0))),
             ]
         _add_kv_table(doc, proforma_rows)
 
@@ -404,11 +457,15 @@ def build_pdf_memo(prop: Dict, rec: Dict, seller: Dict, rehab_items: List = None
         ("Est. MLS Commission", fmt_money(rec.get("mls_commission_estimate", 0))),
     ]))
 
-    # Financial Pro-Forma (for Rehab and Double Close strategies)
+    # Financial Pro-Forma — shown for everything except MLS Referral
     strat = rec.get("strategy", "")
-    if "Rehab" in strat or "Double Close" in strat:
-        story.append(Paragraph("Financial Pro-Forma", section_s))
-        if "Rehab" in strat:
+    show_proforma = "MLS" not in strat
+    is_pass = "Pass" in strat or strat.startswith("NO-GO")
+    if show_proforma:
+        section_title = ("Financial Pro-Forma — Why We Passed"
+                         if is_pass else "Financial Pro-Forma")
+        story.append(Paragraph(section_title, section_s))
+        if "Rehab" in strat or is_pass:
             purchase_price = rec.get("likely_purchase_price", rec.get("cash_offer", 0))
             purchase_label = ("Purchase Price (at Asking)"
                               if rec.get("net_profit_at_asking") is not None
@@ -441,33 +498,74 @@ def build_pdf_memo(prop: Dict, rec: Dict, seller: Dict, rehab_items: List = None
                 ("&nbsp;&nbsp;<b>Net Profit</b>", f"<b>{fmt_money(rec.get('net_profit', 0))}</b>"),
                 ("&nbsp;&nbsp;Projected ROI", fmt_pct(rec.get("roi", 0))),
             ]
-        else:
-            buy_price = rec.get("wholesale_offer", 0)
-            sell_price = rec.get("cash_offer", 0)
-            assignment_fee = rec.get("target_assignment_fee") or (sell_price - buy_price)
-            ab_closing_dc = buy_price * 0.02
-            bc_closing_dc = sell_price * 0.01
-            transactional_fee = buy_price * 0.01
-            total_dc_costs = ab_closing_dc + bc_closing_dc + transactional_fee
-            dc_net = assignment_fee - total_dc_costs
+        elif rec.get("proforma_kind") == "assignment":
             proforma_rows = [
-                ("<b>SELL SIDE (B→C, same day)</b>", ""),
-                ("&nbsp;&nbsp;End-Buyer Price", fmt_money(sell_price)),
-                ("&nbsp;&nbsp;Less: BC Closing Costs (~1%, same-day discount)",
-                 f"({fmt_money(bc_closing_dc)})"),
-                ("&nbsp;&nbsp;Net from End Buyer", fmt_money(sell_price - bc_closing_dc)),
-                ("<b>BUY SIDE (A→B)</b>", ""),
-                ("&nbsp;&nbsp;Your Contract Price (to Seller)", fmt_money(buy_price)),
-                ("&nbsp;&nbsp;Plus: AB Closing Costs (~2%, same-day)",
-                 fmt_money(ab_closing_dc)),
-                ("&nbsp;&nbsp;Plus: Transactional Funding (~1%, 24-hr bridge)",
-                 fmt_money(transactional_fee)),
-                ("&nbsp;&nbsp;Total Your Costs",
-                 fmt_money(buy_price + ab_closing_dc + transactional_fee)),
+                ("<b>STRATEGY</b>", "Assignment — no closings, no rehab on our side"),
+                ("<b>ASSIGNMENT FEE</b>", ""),
+                ("&nbsp;&nbsp;Spread we collect from end buyer",
+                 fmt_money(rec.get("target_assignment_fee") or rec.get("net_profit", 0))),
+                ("<b>OUR COSTS</b>", ""),
+                ("&nbsp;&nbsp;AB Closing (we don't close)", "$0"),
+                ("&nbsp;&nbsp;BC Closing (end buyer pays)", "$0"),
+                ("&nbsp;&nbsp;Holding / COM", "$0"),
                 ("<b>BOTTOM LINE</b>", ""),
-                ("&nbsp;&nbsp;Gross Spread (B − A)", fmt_money(sell_price - buy_price)),
-                ("&nbsp;&nbsp;Less: All Closing &amp; Funding Costs", f"({fmt_money(total_dc_costs)})"),
-                ("&nbsp;&nbsp;<b>Net Profit (to You)</b>", f"<b>{fmt_money(dc_net)}</b>"),
+                ("&nbsp;&nbsp;<b>Net Profit</b>",
+                 f"<b>{fmt_money(rec.get('net_profit', 0))}</b>"),
+            ]
+        elif rec.get("proforma_kind") == "novation":
+            proforma_rows = [
+                ("<b>STRATEGY</b>", "Novation — control via agreement, sell at retail"),
+                ("<b>SALE SIDE (Retail listing)</b>", ""),
+                ("&nbsp;&nbsp;Expected Sale Price (ARV)", fmt_money(rec.get("arv", 0))),
+                (f"&nbsp;&nbsp;Less: Retail Costs ({rec.get('sale_closing_pct', 0.09)*100:.1f}% of ARV)",
+                 f"({fmt_money(rec.get('sale_closing_costs', 0))})"),
+                ("<b>LESS: SELLER'S REQUIRED NET</b>", ""),
+                ("&nbsp;&nbsp;Benchmark (asking or required net)",
+                 f"({fmt_money(rec.get('benchmark', 0))})"),
+                ("<b>LESS: OUR COSTS</b>", ""),
+                ("&nbsp;&nbsp;Rehab (if any)",
+                 f"({fmt_money(rec.get('rehab_total', 0))})"),
+                ("&nbsp;&nbsp;Novation Holding Costs",
+                 f"({fmt_money(rec.get('total_holding', 0))})"),
+                ("<b>BOTTOM LINE</b>", ""),
+                ("&nbsp;&nbsp;<b>Net Profit</b>",
+                 f"<b>{fmt_money(rec.get('net_profit', 0))}</b>"),
+            ]
+        else:
+            # Double Close
+            our_buy_price = rec.get("likely_purchase_price", rec.get("cash_offer", 0))
+            end_buyer_price = rec.get("cash_offer", 0)
+            ab_closing_dc = rec.get("purchase_closing_costs", 0)
+            bc_closing_dc = rec.get("sale_closing_costs", 0)
+            transactional_fee = rec.get("cost_of_money", 0)
+            ab_pct = rec.get("purchase_closing_pct", 0.04)
+            bc_pct = rec.get("sale_closing_pct", 0.02)
+            total_dc_costs = ab_closing_dc + bc_closing_dc + transactional_fee
+            proforma_rows = [
+                ("<b>STRATEGY</b>", "Double Close — buy and immediately resell; end buyer does the rehab"),
+                ("<b>SELL SIDE (B→C, same day)</b>", ""),
+                ("&nbsp;&nbsp;End-Buyer Price (their Cash MAO)",
+                 fmt_money(end_buyer_price)),
+                (f"&nbsp;&nbsp;Less: BC Closing Costs ({bc_pct*100:.1f}%)",
+                 f"({fmt_money(bc_closing_dc)})"),
+                ("&nbsp;&nbsp;Net from End Buyer",
+                 fmt_money(end_buyer_price - bc_closing_dc)),
+                ("<b>BUY SIDE (A→B)</b>", ""),
+                ("&nbsp;&nbsp;Our Contract Price (to Seller)",
+                 fmt_money(our_buy_price)),
+                (f"&nbsp;&nbsp;Plus: AB Closing Costs ({ab_pct*100:.1f}%)",
+                 fmt_money(ab_closing_dc)),
+                ("&nbsp;&nbsp;Plus: Transactional Funding (1%, same-day bridge)",
+                 fmt_money(transactional_fee)),
+                ("&nbsp;&nbsp;Total Our Costs",
+                 fmt_money(our_buy_price + ab_closing_dc + transactional_fee)),
+                ("<b>BOTTOM LINE</b>", ""),
+                ("&nbsp;&nbsp;Gross Spread (B − A)",
+                 fmt_money(end_buyer_price - our_buy_price)),
+                ("&nbsp;&nbsp;Less: All Closing &amp; Funding Costs",
+                 f"({fmt_money(total_dc_costs)})"),
+                ("&nbsp;&nbsp;<b>Net Profit</b>",
+                 f"<b>{fmt_money(rec.get('net_profit', 0))}</b>"),
             ]
         story.append(kv_table(proforma_rows))
 
