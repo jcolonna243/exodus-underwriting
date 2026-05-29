@@ -150,32 +150,41 @@ def build_word_memo(prop: Dict, rec: Dict, seller: Dict, rehab_items: List = Non
             monthly_holding_total = rec.get('monthly_holding', 0)
             ins_line = rec.get('monthly_insurance', 0)
             tax_line = rec.get('monthly_taxes', 0)
+            arv = rec.get("arv", 0)
+            bc_closing = rec.get("sale_closing_costs", 0)
+            ab_closing = rec.get("purchase_closing_costs", 0)
+            rehab = rec.get("rehab_total", 0)
+            holding = rec.get("total_holding", 0)
+            com = rec.get("cost_of_money", 0)
+            # Net Acquisition+Project Cost = TPC minus BC (BC is shown on sale side)
+            net_acq_cost = purchase_price + ab_closing + rehab + holding + com
+            net_sale_proceeds = arv - bc_closing
             proforma_rows = [
                 ("SALE SIDE (B→C)", ""),
-                ("  Expected Sale Price (ARV)", fmt_money(rec.get("arv", 0))),
+                ("  Expected Sale Price (ARV)", fmt_money(arv)),
                 (f"  Less: BC Closing Costs ({rec.get('sale_closing_pct', 0.07):.1%})",
-                 f"({fmt_money(rec.get('sale_closing_costs', 0))})"),
-                ("  Net Sale Proceeds",
-                 fmt_money(rec.get("arv", 0) - rec.get("sale_closing_costs", 0))),
+                 f"({fmt_money(bc_closing)})"),
+                ("  Net Sale Proceeds", fmt_money(net_sale_proceeds)),
                 ("", ""),
                 ("ACQUISITION & PROJECT (A→B + Hold)", ""),
                 (f"  {purchase_label}", fmt_money(purchase_price)),
                 (f"  Plus: AB Closing Costs ({rec.get('purchase_closing_pct', 0.04):.1%})",
-                 fmt_money(rec.get("purchase_closing_costs", 0))),
-                ("  Plus: Total Rehab", fmt_money(rec.get("rehab_total", 0))),
+                 fmt_money(ab_closing)),
+                ("  Plus: Total Rehab", fmt_money(rehab)),
                 (f"  Plus: Holding Costs ({rec.get('loan_duration_months', 6)} mo × "
                  f"{fmt_money(monthly_holding_total)}/mo)",
-                 fmt_money(rec.get("total_holding", 0))),
+                 fmt_money(holding)),
                 (f"      — incl. Insurance {fmt_money(ins_line)}/mo + "
                  f"Taxes {fmt_money(tax_line)}/mo", ""),
                 (f"  Plus: Cost of Money ({rec.get('ltc', 0.9):.0%} LTC, "
                  f"loan {fmt_money(rec.get('likely_loan', 0))} @ "
                  f"{rec.get('interest_rate', 0.10):.1%})",
-                 fmt_money(rec.get("cost_of_money", 0))),
-                ("  Total Project Cost", fmt_money(rec.get("total_project_cost", 0))),
+                 fmt_money(com)),
+                ("  Total Acquisition + Project Cost", fmt_money(net_acq_cost)),
                 ("", ""),
                 ("BOTTOM LINE", ""),
-                ("  Net Profit", fmt_money(rec.get("net_profit", 0))),
+                ("  Net Sale Proceeds − Total Cost = Net Profit",
+                 fmt_money(rec.get("net_profit", 0))),
                 ("  Projected ROI", fmt_pct(rec.get("roi", 0))),
             ]
         elif rec.get("proforma_kind") == "assignment":
@@ -472,30 +481,41 @@ def build_pdf_memo(prop: Dict, rec: Dict, seller: Dict, rehab_items: List = None
                               else "Purchase Price (Cash MAO)")
             ins_line = rec.get('monthly_insurance', 0)
             tax_line = rec.get('monthly_taxes', 0)
+            arv = rec.get("arv", 0)
+            bc_closing = rec.get("sale_closing_costs", 0)
+            ab_closing = rec.get("purchase_closing_costs", 0)
+            rehab = rec.get("rehab_total", 0)
+            holding = rec.get("total_holding", 0)
+            com = rec.get("cost_of_money", 0)
+            # Net Acquisition+Project Cost excludes BC (BC is on sale side)
+            net_acq_cost = purchase_price + ab_closing + rehab + holding + com
+            net_sale_proceeds = arv - bc_closing
             proforma_rows = [
                 ("<b>SALE SIDE (B→C)</b>", ""),
-                ("&nbsp;&nbsp;Expected Sale Price (ARV)", fmt_money(rec.get("arv", 0))),
+                ("&nbsp;&nbsp;Expected Sale Price (ARV)", fmt_money(arv)),
                 (f"&nbsp;&nbsp;Less: BC Closing Costs ({rec.get('sale_closing_pct', 0.07):.1%})",
-                 f"({fmt_money(rec.get('sale_closing_costs', 0))})"),
-                ("&nbsp;&nbsp;Net Sale Proceeds",
-                 fmt_money(rec.get("arv", 0) - rec.get("sale_closing_costs", 0))),
+                 f"({fmt_money(bc_closing)})"),
+                ("&nbsp;&nbsp;Net Sale Proceeds", fmt_money(net_sale_proceeds)),
                 ("<b>ACQUISITION &amp; PROJECT (A→B + Hold)</b>", ""),
                 (f"&nbsp;&nbsp;{purchase_label}", fmt_money(purchase_price)),
                 (f"&nbsp;&nbsp;Plus: AB Closing Costs ({rec.get('purchase_closing_pct', 0.04):.1%})",
-                 fmt_money(rec.get("purchase_closing_costs", 0))),
-                ("&nbsp;&nbsp;Plus: Total Rehab", fmt_money(rec.get("rehab_total", 0))),
+                 fmt_money(ab_closing)),
+                ("&nbsp;&nbsp;Plus: Total Rehab", fmt_money(rehab)),
                 (f"&nbsp;&nbsp;Plus: Holding Costs ({rec.get('loan_duration_months', 6)} mo × "
                  f"{fmt_money(rec.get('monthly_holding', 0))}/mo)",
-                 fmt_money(rec.get("total_holding", 0))),
+                 fmt_money(holding)),
                 (f"&nbsp;&nbsp;&nbsp;&nbsp;<i>— incl. Insurance {fmt_money(ins_line)}/mo "
                  f"+ Taxes {fmt_money(tax_line)}/mo</i>", ""),
                 (f"&nbsp;&nbsp;Plus: Cost of Money ({rec.get('ltc', 0.9):.0%} LTC, "
                  f"loan {fmt_money(rec.get('likely_loan', 0))} @ "
                  f"{rec.get('interest_rate', 0.10):.1%})",
-                 fmt_money(rec.get("cost_of_money", 0))),
-                ("&nbsp;&nbsp;Total Project Cost", fmt_money(rec.get("total_project_cost", 0))),
+                 fmt_money(com)),
+                ("&nbsp;&nbsp;Total Acquisition + Project Cost",
+                 fmt_money(net_acq_cost)),
                 ("<b>BOTTOM LINE</b>", ""),
-                ("&nbsp;&nbsp;<b>Net Profit</b>", f"<b>{fmt_money(rec.get('net_profit', 0))}</b>"),
+                ("&nbsp;&nbsp;Net Sale Proceeds − Total Cost", ""),
+                ("&nbsp;&nbsp;<b>Net Profit</b>",
+                 f"<b>{fmt_money(rec.get('net_profit', 0))}</b>"),
                 ("&nbsp;&nbsp;Projected ROI", fmt_pct(rec.get("roi", 0))),
             ]
         elif rec.get("proforma_kind") == "assignment":
