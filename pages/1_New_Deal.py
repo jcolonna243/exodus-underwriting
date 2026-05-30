@@ -26,6 +26,19 @@ st.set_page_config(page_title="New Deal", page_icon="📝", layout="wide")
 user = require_login()
 sidebar_account_widget()
 
+# --- Reset Form handler --------------------------------------------------
+# Streamlit's widget state persists across reruns even when we delete
+# session_state keys at the END of a run. We clear here at the TOP of the
+# next run instead — before any widgets render — which actually resets them.
+if st.session_state.pop("_pending_reset", False):
+    keys = [k for k in list(st.session_state.keys()) if not k.startswith("_st_")]
+    for k in keys:
+        try:
+            del st.session_state[k]
+        except Exception:
+            pass
+    st.toast("✅ Form reset.", icon="🧹")
+
 st.title("📝 New Deal Analysis")
 
 # ============================================================================
@@ -626,8 +639,9 @@ except Exception as e:
     c3.error(f"PDF error: {e}")
 
 if c4.button("Reset form", use_container_width=True):
-    for k in list(st.session_state.keys()):
-        del st.session_state[k]
+    # Set flag; actual clearing happens at top of next run (before widgets
+    # render) so Streamlit's internal widget cache also resets.
+    st.session_state["_pending_reset"] = True
     st.rerun()
 
 # ============================================================================
