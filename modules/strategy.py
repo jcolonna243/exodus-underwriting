@@ -769,6 +769,10 @@ def decide_strategy(
 
     # Rehab zone
     if eff_scope == "Heavy":
+        # Was forced DC, but Assignment has no closing costs and is structurally
+        # more profitable for high-priced deals. Only fall to DC when forced.
+        if assignable and not buyer_prefers_dc:
+            return "Wholesale — Assignment (heavy scope, fat fee)"
         return "Wholesale — Double Close (heavy scope, fat fee)"
     return "Rehab"
 
@@ -981,10 +985,13 @@ def rationale_text(strategy: str, ctx: Dict) -> str:
         return (f"Profit {fmt_money(p['net_profit'])} in $30-50k band; assignment fits "
                 f"(fee {fmt_money(p['assignment_fee'])} below DC trigger).")
     if "heavy scope" in strategy:
-        return (f"Profit {fmt_money(p['net_profit'])} puts this in rehab zone, but "
-                f"{fmt_money(p['rehab_total'])} rehab is Heavy — too risky to take down. "
-                f"Wholesale via DC with fat fee target {fmt_money(p['target_fat_fee'])} "
-                f"(25% of profit).")
+        exit_kind = ("Assignment" if "Assignment" in strategy else "DC")
+        rehab_profit = p.get("net_profit_at_mao") or p['net_profit']
+        return (f"Heavy rehab {fmt_money(p['rehab_total'])} — too risky to take down. "
+                f"End buyer's projected profit after rehab is {fmt_money(rehab_profit)}; "
+                f"wholesale via {exit_kind} with fat fee target "
+                f"{fmt_money(p['target_fat_fee'])} (25% of end buyer's profit, "
+                f"floor $15k, end buyer keeps ≥$50k).")
     return f"Profit fits wholesale band; DC required — fee/contract/buyer triggers active."
 
 
@@ -1397,10 +1404,20 @@ def compute_recommendation(inputs: Dict[str, Any]) -> Dict[str, Any]:
 
     # Target assignment fee
     if "heavy scope" in strategy:
-        recommended_fee = target_fat_fee(net_profit, params)
-        fee_note = (f"Fat fee = 25% of profit {fmt_money(net_profit)}; floor $15k, "
-                    f"ceiling {fmt_money(max(15000, net_profit - 50000))} "
+        # Fat fee = 25% of what the end buyer's REHAB profit would be — NOT the
+        # DC profit (which is artificially small due to DC closing costs).
+        # net_profit_at_mao reflects Rehab-math profit at end buyer's MAO.
+        fat_fee_basis = net_profit_at_mao if net_profit_at_mao and net_profit_at_mao > 0 else net_profit
+        recommended_fee = target_fat_fee(fat_fee_basis, params)
+        fee_note = (f"Fat fee = 25% of end buyer's projected rehab profit "
+                    f"{fmt_money(fat_fee_basis)}; floor $15k, "
+                    f"ceiling {fmt_money(max(15000, fat_fee_basis - 50000))} "
                     f"(end buyer keeps ≥$50k)")
+        # For Assignment (heavy scope, fat fee), the assignment fee IS our profit
+        if "Assignment" in strategy:
+            net_profit = recommended_fee
+            tpc = 0
+            roi = 0
     elif "Wholesale" in strategy or "Short Sale" in strategy:
         recommended_fee = params["default_assignment_fee"]
         fee_note = "Default $15k; flex down to $2k floor to clear"
