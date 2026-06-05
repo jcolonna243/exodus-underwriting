@@ -76,6 +76,24 @@ with tab_repair:
         new_rates["roof_flat_per_sqft"] = c3.number_input(
             "Roof — Flat ($/sf)", value=float(live["roof_flat_per_sqft"]), step=0.5)
 
+        st.caption(
+            "Roof footprint multipliers — actual roof area = living sqft × this multiplier. "
+            "A 2-story house has roughly half the roof area of a 1-story with the same living sqft."
+        )
+        c1, c2, c3 = st.columns(3)
+        new_rates["roof_footprint_pct_1story"] = c1.number_input(
+            "1-story multiplier",
+            value=float(live.get("roof_footprint_pct_1story", 1.00)),
+            min_value=0.30, max_value=1.20, step=0.05, format="%.2f")
+        new_rates["roof_footprint_pct_1_5story"] = c2.number_input(
+            "1.5-story multiplier",
+            value=float(live.get("roof_footprint_pct_1_5story", 0.75)),
+            min_value=0.30, max_value=1.20, step=0.05, format="%.2f")
+        new_rates["roof_footprint_pct_2story"] = c3.number_input(
+            "2-story multiplier",
+            value=float(live.get("roof_footprint_pct_2story", 0.55)),
+            min_value=0.30, max_value=1.20, step=0.05, format="%.2f")
+
         c1, c2, c3 = st.columns(3)
         new_rates["interior_paint_full_per_sqft"] = c1.number_input(
             "Interior Paint — Knockdown + Paint ($/sf)",
@@ -134,26 +152,33 @@ with tab_repair:
             value=int(live.get("kitchen_light_update", 5_000)), step=500)
         new_rates["bathroom_full_remodel"] = c3.number_input(
             "Bath — Full (per bath)",
-            value=int(live["bathroom_full_remodel"]), step=500)
+            value=int(live["bathroom_full_remodel"]), step=500,
+            help="Full demo, new tile, vanity, shower/tub, fixtures.")
 
         c1, c2, c3 = st.columns(3)
-        new_rates["bathroom_half"] = c1.number_input(
+        new_rates["bathroom_partial_remodel"] = c1.number_input(
+            "Bath — Partial (per bath)",
+            value=int(live.get("bathroom_partial_remodel", 2_500)), step=250,
+            help="Paint, vanity, fixtures, toilet, re-glaze tub if needed.")
+        new_rates["bathroom_half"] = c2.number_input(
             "Bath — Half (per half-bath)",
             value=int(live.get("bathroom_half", 1_500)), step=100)
-        new_rates["appliances"] = c2.number_input(
+        new_rates["appliances"] = c3.number_input(
             "Appliances", value=int(live["appliances"]), step=500)
-        new_rates["lighting_all_new"] = c3.number_input(
-            "Lighting (all new)",
-            value=int(live.get("lighting_all_new", 1_500)), step=100)
 
         c1, c2, c3 = st.columns(3)
-        new_rates["hot_water_tank"] = c1.number_input(
+        new_rates["lighting_all_new"] = c1.number_input(
+            "Lighting (all new)",
+            value=int(live.get("lighting_all_new", 1_500)), step=100)
+        new_rates["hot_water_tank"] = c2.number_input(
             "Hot water tank",
             value=int(live.get("hot_water_tank", 1_000)), step=100)
-        new_rates["cosmetic_demo"] = c2.number_input(
+        new_rates["cosmetic_demo"] = c3.number_input(
             "Cosmetic demo",
             value=int(live.get("cosmetic_demo", 1_500)), step=100)
-        new_rates["final_cleaning"] = c3.number_input(
+
+        c1, c2, c3 = st.columns(3)
+        new_rates["final_cleaning"] = c1.number_input(
             "Final cleaning",
             value=int(live.get("final_cleaning", 350)), step=50)
 

@@ -103,6 +103,24 @@ def lookup_property(address: str) -> Dict[str, Any]:
     features = rec.get("features") or {}
     pool = "Yes" if features.get("pool") else "No"
     garage_count = int(features.get("garageSpaces") or features.get("garage") or 0)
+
+    # Stories — RentCast occasionally returns this. Snap to nearest supported
+    # value (1, 1.5, 2). Default 1 if missing.
+    raw_stories = (features.get("floorCount")
+                    or features.get("stories")
+                    or rec.get("floorCount")
+                    or rec.get("stories")
+                    or 1)
+    try:
+        s = float(raw_stories)
+    except (TypeError, ValueError):
+        s = 1.0
+    if s >= 1.75:
+        stories_val = 2
+    elif s >= 1.25:
+        stories_val = 1.5
+    else:
+        stories_val = 1
     # Property type — normalize to our UI labels
     raw_type = rec.get("propertyType", "")
     prop_type_map_reverse = {v: k for k, v in PROPERTY_TYPE_MAP.items()}
@@ -132,6 +150,7 @@ def lookup_property(address: str) -> Dict[str, Any]:
         "baths": float(rec.get("bathrooms") or 0),
         "sqft": int(rec.get("squareFootage") or 0),
         "year": int(rec.get("yearBuilt") or 0),
+        "stories": stories_val,
         "lot_size": int(rec.get("lotSize") or 0),
         "pool": pool,
         "garage_spaces": garage_count,

@@ -13,9 +13,9 @@ import streamlit as st
 import pandas as pd
 from io import BytesIO
 from modules.auth import require_login, sidebar_account_widget
-from modules.strategy import (compute_recommendation, DEFAULTS,
-                              rehab_subtotal, rehab_with_contingency,
-                              rehab_breakdown)
+from modules.strategy import (compute_recommendation, compute_alternatives,
+                              DEFAULTS, rehab_subtotal,
+                              rehab_with_contingency, rehab_breakdown)
 from modules.comp_import import parse_comp_file, suggested_arv
 from modules.memo import build_word_memo, build_pdf_memo
 from modules.db import save_deal, save_chat_bulk
@@ -58,8 +58,8 @@ with c_btn:
     do_lookup = st.button(
         "🔍 Look up",
         use_container_width=True,
-        help="Auto-fill city/state/zip/beds/baths/sqft/year/pool/HOA from "
-             "RentCast public records.",
+        help="Auto-fill city/state/zip/beds/baths/sqft/year/stories/pool/HOA "
+             "from RentCast public records.",
     )
 
 # Lookup handler runs BEFORE the remaining widgets render, so session_state
@@ -76,7 +76,7 @@ if do_lookup:
         if result.get("found"):
             updated = []
             for field in ["city", "state", "zip", "beds", "baths", "sqft",
-                          "year", "pool", "hoa", "annual_taxes",
+                          "year", "stories", "pool", "hoa", "annual_taxes",
                           "garage_spaces", "property_type"]:
                 v = result.get(field)
                 if v not in (None, 0, "", "0"):
@@ -103,13 +103,18 @@ city = c1.text_input("City", value="Miami", key="city")
 state = c2.text_input("State", value="FL", key="state")
 zip_code = c3.text_input("ZIP", key="zip")
 
-c1, c2, c3, c4 = st.columns(4)
+c1, c2, c3, c4, c5 = st.columns(5)
 beds = c1.number_input("Beds", min_value=0, max_value=20, value=3, key="beds")
 baths = c2.number_input("Baths", min_value=0.0, max_value=20.0, step=0.5,
                         value=2.0, key="baths")
 sqft = c3.number_input("Living Sqft", min_value=0, value=1500, step=50, key="sqft")
 year = c4.number_input("Year Built", min_value=1900, max_value=2030,
                        value=1980, key="year")
+stories = c5.selectbox(
+    "Stories", [1, 1.5, 2], key="stories",
+    help="Used to compute actual roof footprint. A 2-story house has roughly "
+         "55% the roof area of a 1-story house with the same living sqft.",
+)
 
 c1, c2, c3, c4 = st.columns(4)
 pool = c1.selectbox("Pool?", ["No", "Yes"], key="pool")
@@ -148,6 +153,7 @@ acquisition_type = c4.selectbox(
 property_dict = {
     "address": address, "city": city, "state": state, "zip": zip_code,
     "beds": beds, "baths": baths, "sqft": sqft, "year": year,
+    "stories": stories,
     "pool": pool, "hoa": hoa, "asking": asking,
     "acquisition_type": acquisition_type,
     "annual_taxes": annual_taxes,
@@ -386,7 +392,36 @@ with st.container(border=True):
             "Standard misc work")
     _toggle("ac", "A/C")
     _toggle("kitchen", "Kitchen", ["Full remodel", "Light update"], "Full remodel")
-    _toggle("bathrooms", "Bathrooms (full)")
+
+    # Bathrooms — Full ($6k) vs Partial ($2.5k). Defaults: all baths counted as Full.
+    bath_prev = st.session_state.rehab.get("bathrooms", {}) or {}
+    bcols = st.columns([1, 2, 2, 2])
+    bath_include = bcols[0].checkbox(
+        "Bathrooms", key="rehab_bathrooms_include",
+        value=bath_prev.get("include", False),
+    )
+    bath_cfg = {"include": bath_include}
+    if bath_include:
+        default_full = int(bath_prev.get("full", baths) or 0)
+        default_partial = int(bath_prev.get("partial", 0) or 0)
+        full_n = bcols[1].number_input(
+            "Full ($6k ea)", min_value=0, max_value=20, value=default_full, step=1,
+            key="rehab_bath_full",
+            help="Full demo + new tile + new vanity + new shower/tub + fixtures.",
+        )
+        partial_n = bcols[2].number_input(
+            "Partial ($2.5k ea)", min_value=0, max_value=20, value=default_partial, step=1,
+            key="rehab_bath_partial",
+            help="Paint, vanity, fixtures, toilet, re-glaze tub if needed.",
+        )
+        bath_cfg["full"] = full_n
+        bath_cfg["partial"] = partial_n
+        # Show inline subtotal so the user sees the impact immediately
+        bath_sub = full_n * 6000 + partial_n * 2500
+        bcols[3].markdown(f"<div style='padding-top:0.4em'>= **${bath_sub:,}**</div>",
+                          unsafe_allow_html=True)
+    st.session_state.rehab["bathrooms"] = bath_cfg
+
     _toggle("half_bathrooms", "Half Bathrooms", qty_default=1)
     _toggle("interior_paint", "Interior Paint",
             ["Knockdown + Paint", "Paint only", "Knockdown only"], "Knockdown + Paint")
@@ -409,8 +444,9 @@ with st.container(border=True):
                 ["Replace Motor", "Replace Pump", "Heater",
                  "Waterline Tile", "Diamond Brite"], "Replace Motor")
 
-# Live rehab total + line-item breakdown
-sub_total = rehab_subtotal(st.session_state.rehab, sqft, baths, pool == "Yes")
+# Live rehab total + line-item breakdown — pass stories so roof math is correct
+sub_total = rehab_subtotal(st.session_state.rehab, sqft, baths, pool == "Yes",
+                           stories=stories)
 total_rehab = rehab_with_contingency(sub_total)
 contingency = total_rehab - sub_total
 c1, c2, c3 = st.columns(3)
@@ -420,7 +456,8 @@ c2.metric("Contingency", f"${contingency:,.0f}",
 c3.metric("Total Rehab", f"${total_rehab:,.0f}")
 
 # Line-item breakdown — shows each included item with its computed amount
-items = rehab_breakdown(st.session_state.rehab, sqft, baths, pool == "Yes")
+items = rehab_breakdown(st.session_state.rehab, sqft, baths, pool == "Yes",
+                        stories=stories)
 if items:
     with st.expander("📋 Rehab line items (click to expand)", expanded=True):
         for label, amount in items:
@@ -521,7 +558,20 @@ inputs_dict = {
     "seller": seller_dict,
     "params": params_override,
 }
-rec = compute_recommendation(inputs_dict)
+
+# Compute the tool's auto-recommendation PLUS any alternative qualifying
+# strategies so we can show the user a side-by-side comparison and let them
+# pick which one drives the memo.
+alternatives = compute_alternatives(inputs_dict)
+auto_rec = alternatives[0]  # the tool's automatic pick
+
+# Did the user override the auto pick by clicking "Use this strategy" on
+# one of the alternative cards in a previous run?
+forced_strategy = st.session_state.get("forced_strategy")
+if forced_strategy and forced_strategy != auto_rec["auto_strategy"]:
+    rec = compute_recommendation(inputs_dict, force_strategy=forced_strategy)
+else:
+    rec = auto_rec
 
 # Headline banner
 banner_color = "#C6EFCE"  # green default
@@ -531,11 +581,13 @@ if "Pass" in strat or "NO-GO" in strat:
 elif "Marginal" in strat:
     banner_color = "#FFF2CC"  # yellow
 
+_is_override = rec.get("is_forced", False)
+_tag = "STRATEGY (your override)" if _is_override else "RECOMMENDED STRATEGY"
 st.markdown(
     f"""
     <div style="background-color:{banner_color}; padding:20px; border-radius:8px;
                 border-left:6px solid #1F4E78; margin-bottom:16px;">
-        <div style="font-size:11px; color:#666; font-weight:bold;">RECOMMENDED STRATEGY</div>
+        <div style="font-size:11px; color:#666; font-weight:bold;">{_tag}</div>
         <div style="font-size:24px; font-weight:bold; color:#1F4E78; margin:4px 0;">
             {strat}
         </div>
@@ -544,6 +596,14 @@ st.markdown(
         </div>
     </div>
     """, unsafe_allow_html=True)
+
+if _is_override:
+    _auto_name = auto_rec["auto_strategy"]
+    c_undo, _ = st.columns([2, 5])
+    if c_undo.button(f"↩ Revert to tool's auto pick ({_auto_name})",
+                     use_container_width=True):
+        st.session_state.pop("forced_strategy", None)
+        st.rerun()
 
 # Offer numbers
 if not (strat.startswith("Pass") or strat == "NO-GO — Pass" or strat == "MLS Referral"):
@@ -573,6 +633,90 @@ for i in range(0, len(metrics), 4):
     cols = st.columns(4)
     for j, (label, value) in enumerate(metrics[i:i + 4]):
         cols[j].metric(label, value)
+
+# ============================================================================
+# ALTERNATIVE STRATEGIES — side-by-side comparison cards
+# ============================================================================
+# Show the OTHER qualifying strategies for this deal so the user can compare
+# trade-offs and override the auto-pick if they want. Filter out whatever's
+# currently active (auto or forced) so we don't show a "use" button for the
+# strategy already in play.
+_active_strat_name = rec["strategy"]
+_other_alts = [a for a in alternatives
+               if a["strategy"] != _active_strat_name]
+# If the user has forced a strategy that ISN'T in `alternatives` (edge case
+# — e.g. they forced Novation, then the input changed such that the auto
+# decided on Novation too), the auto-rec needs to appear as an alternative
+# so they can switch back.
+if rec.get("is_forced"):
+    _auto_already_listed = any(a["strategy"] == auto_rec["strategy"]
+                                for a in _other_alts)
+    if not _auto_already_listed and auto_rec["strategy"] != _active_strat_name:
+        _other_alts.insert(0, auto_rec)
+if _other_alts:
+    st.markdown("### ⚖️ Compare Other Strategies")
+    st.caption(
+        "These are other strategies the tool considered for this deal. "
+        "Click **Use this strategy** to switch the memo and offer terms to "
+        "that path."
+    )
+
+    def _seller_gets_for(r):
+        """How much the seller walks away with under each strategy."""
+        kind = r.get("proforma_kind")
+        if kind == "novation":
+            return r.get("benchmark", 0)
+        if kind == "assignment":
+            return r.get("wholesale_offer", 0)
+        if kind == "dc":
+            return r.get("likely_purchase_price", 0)
+        if kind == "pass":
+            return r.get("benchmark", 0) or r.get("asking", 0)
+        # rehab
+        return r.get("likely_purchase_price", 0) or r.get("cash_offer", 0)
+
+    def _exodus_makes_for(r):
+        """How much Exodus actually takes home under each strategy."""
+        strat_str = r.get("strategy", "")
+        if "MLS" in strat_str:
+            return r.get("mls_commission_estimate", 0)
+        if "Assignment" in strat_str:
+            return r.get("target_assignment_fee") or r.get("net_profit", 0)
+        return r.get("net_profit", 0)
+
+    # Render 2 cards per row
+    for i in range(0, len(_other_alts), 2):
+        cols = st.columns(2)
+        for j, alt in enumerate(_other_alts[i:i + 2]):
+            with cols[j].container(border=True):
+                _alt_strat = alt["strategy"]
+                _alt_seller = _seller_gets_for(alt)
+                _alt_exodus = _exodus_makes_for(alt)
+                st.markdown(f"**{_alt_strat}**")
+                m1, m2 = st.columns(2)
+                m1.metric("Seller gets", f"${_alt_seller:,.0f}")
+                m2.metric("Exodus makes", f"${_alt_exodus:,.0f}")
+                # Show any caveats
+                if "Novation" in _alt_strat and not alt.get("novation_feasible"):
+                    st.caption(
+                        "⚠️ Heavy rehab — MLS buyers may pass on this as-is. "
+                        "Shown for comparison; use only if you have a buyer-type "
+                        "strategy that works around the condition."
+                    )
+                if "MLS" in _alt_strat and not alt.get("mls_feasible"):
+                    st.caption(
+                        "⚠️ Doesn't strictly qualify (heavy scope or seller "
+                        "not open to listing). Shown for comparison."
+                    )
+                # Rationale
+                if alt.get("rationale"):
+                    with st.expander("Why this strategy"):
+                        st.write(alt["rationale"])
+                if st.button("Use this strategy",
+                             key=f"force_strat_{_alt_strat}",
+                             use_container_width=True):
+                    st.session_state["forced_strategy"] = _alt_strat
+                    st.rerun()
 
 # Diagnostics (collapsed)
 with st.expander("🔍 Diagnostics — decision logic flags"):

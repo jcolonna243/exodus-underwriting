@@ -120,8 +120,14 @@ REPAIR_RATES = {
     # Flat
     "kitchen_full_remodel": 12_000,
     "kitchen_light_update": 5_000,           # NEW: refresh vs full remodel
-    "bathroom_full_remodel": 6_000,
+    "bathroom_full_remodel": 6_000,          # full demo + tile + vanity + fixtures
+    "bathroom_partial_remodel": 2_500,       # NEW: paint, vanity, fixtures, re-glaze
     "bathroom_half": 1_500,                  # NEW: per half-bath
+    # Roof footprint multipliers — actual roof area = sqft × multiplier.
+    # A 2-story house has ~half the roof footprint of its living sqft.
+    "roof_footprint_pct_1story": 1.00,
+    "roof_footprint_pct_1_5story": 0.75,
+    "roof_footprint_pct_2story": 0.55,
     "electrical_standard_misc": 1_500,
     "electrical_breaker_box": 2_500,
     "electrical_full": 4_000,
@@ -173,7 +179,24 @@ def get_strategy_defaults() -> Dict[str, Any]:
 # ============================================================================
 # REHAB CALCULATOR — mirrors the toggle-based rehab estimate
 # ============================================================================
-def rehab_subtotal(rehab: Dict[str, Any], sqft: int, baths: float, pool: bool) -> float:
+def _roof_footprint_pct(stories: float, r: Dict[str, float]) -> float:
+    """Return the roof-area-to-living-sqft ratio for a given story count.
+    A 2-story house has roughly 55% the roof footprint of a 1-story with the
+    same living area. Defaults: 1 story=1.0, 1.5 story=0.75, 2 story=0.55.
+    """
+    try:
+        s = float(stories)
+    except (TypeError, ValueError):
+        s = 1.0
+    if s >= 2.0:
+        return r.get("roof_footprint_pct_2story", 0.55)
+    if s >= 1.5:
+        return r.get("roof_footprint_pct_1_5story", 0.75)
+    return r.get("roof_footprint_pct_1story", 1.0)
+
+
+def rehab_subtotal(rehab: Dict[str, Any], sqft: int, baths: float, pool: bool,
+                   stories: float = 1.0) -> float:
     """Compute total rehab from toggle dict.
 
     rehab dict keys (all optional; missing = not included):
@@ -181,7 +204,8 @@ def rehab_subtotal(rehab: Dict[str, Any], sqft: int, baths: float, pool: bool) -
       electrical: {"include": bool, "type": "Standard misc work"|"Replace Breaker Box"|"Full (panel + misc)"}
       ac: {"include": bool}
       kitchen: {"include": bool}
-      bathrooms: {"include": bool}
+      bathrooms: {"include": bool, "full": int, "partial": int}
+         If "full" / "partial" not set, all `baths` counted at full rate (legacy).
       interior_paint: {"include": bool, "type": "Knockdown + Paint"|"Paint only"|"Knockdown only"}
       exterior_paint: {"include": bool}
       flooring: {"include": bool}
@@ -193,6 +217,9 @@ def rehab_subtotal(rehab: Dict[str, Any], sqft: int, baths: float, pool: bool) -
       pool: {"include": bool, "type": "Replace Motor"|"Replace Pump"|"Heater"|"Waterline Tile"|"Diamond Brite"}
       other_1: {"include": bool, "amount": float, "description": str}
       other_2: {"include": bool, "amount": float, "description": str}
+
+    `stories` (1, 1.5, or 2) drives the roof footprint calc — a 2-story
+    house's roof covers about half its living sqft.
     """
     r = get_repair_rates()
     total = 0.0
@@ -200,7 +227,7 @@ def rehab_subtotal(rehab: Dict[str, Any], sqft: int, baths: float, pool: bool) -
     def get(key):
         return rehab.get(key, {}) or {}
 
-    # Roof
+    # Roof — actual roof footprint depends on # of stories
     roof = get("roof")
     if roof.get("include"):
         t = roof.get("type", "Shingle")
@@ -209,7 +236,8 @@ def rehab_subtotal(rehab: Dict[str, Any], sqft: int, baths: float, pool: bool) -
             "Shingle": r["roof_shingle_per_sqft"],
             "Tile": r["roof_tile_per_sqft"],
         }.get(t, r["roof_shingle_per_sqft"])
-        total += sqft * rate
+        roof_sqft = sqft * _roof_footprint_pct(stories, r)
+        total += roof_sqft * rate
 
     # Electrical
     el = get("electrical")
@@ -233,9 +261,18 @@ def rehab_subtotal(rehab: Dict[str, Any], sqft: int, baths: float, pool: bool) -
         kind = kit.get("type", "Full remodel")
         total += r["kitchen_light_update"] if kind == "Light update" else r["kitchen_full_remodel"]
 
-    # Bathrooms (full count)
-    if get("bathrooms").get("include"):
-        total += baths * r["bathroom_full_remodel"]
+    # Bathrooms — supports a split between Full and Partial remodels.
+    # New format:    {"include": True, "full": 2, "partial": 3}
+    # Legacy format: {"include": True}  → all `baths` counted at full rate.
+    bath_cfg = get("bathrooms")
+    if bath_cfg.get("include"):
+        if "full" in bath_cfg or "partial" in bath_cfg:
+            full_n = bath_cfg.get("full", 0) or 0
+            partial_n = bath_cfg.get("partial", 0) or 0
+            total += full_n * r["bathroom_full_remodel"]
+            total += partial_n * r["bathroom_partial_remodel"]
+        else:
+            total += baths * r["bathroom_full_remodel"]
 
     # Half bathrooms (count)
     half = get("half_bathrooms")
@@ -343,9 +380,12 @@ def rehab_with_contingency(subtotal: float) -> float:
     return subtotal + contingency
 
 
-def rehab_breakdown(rehab: Dict[str, Any], sqft: int, baths: float, pool: bool) -> List[tuple]:
+def rehab_breakdown(rehab: Dict[str, Any], sqft: int, baths: float, pool: bool,
+                    stories: float = 1.0) -> List[tuple]:
     """Return a list of (item_name, amount) for each included rehab line item.
     Items not included (toggle=No) are omitted.
+
+    `stories` (1, 1.5, or 2) drives the roof footprint calc.
     """
     r = get_repair_rates()
     items = []
@@ -356,7 +396,13 @@ def rehab_breakdown(rehab: Dict[str, Any], sqft: int, baths: float, pool: bool) 
         t = roof.get("type", "Shingle")
         rate = {"Flat": r["roof_flat_per_sqft"], "Shingle": r["roof_shingle_per_sqft"],
                 "Tile": r["roof_tile_per_sqft"]}.get(t, r["roof_shingle_per_sqft"])
-        items.append((f"Roof ({t}, {sqft:,} sf × ${rate}/sf)", sqft * rate))
+        roof_pct = _roof_footprint_pct(stories, r)
+        roof_sqft = sqft * roof_pct
+        label_stories = f"{stories:g}-story" if float(stories) != 1.0 else "1-story"
+        items.append(
+            (f"Roof ({t}, {label_stories}, {roof_sqft:,.0f} sf footprint × ${rate}/sf)",
+             roof_sqft * rate)
+        )
 
     el = get("electrical")
     if el.get("include"):
@@ -379,9 +425,26 @@ def rehab_breakdown(rehab: Dict[str, Any], sqft: int, baths: float, pool: bool) 
         else:
             items.append(("Kitchen (full remodel)", r["kitchen_full_remodel"]))
 
-    if get("bathrooms").get("include"):
-        items.append((f"Bathrooms ({baths:g} bath{'s' if baths != 1 else ''} × ${r['bathroom_full_remodel']:,})",
-                      baths * r["bathroom_full_remodel"]))
+    bath_cfg = get("bathrooms")
+    if bath_cfg.get("include"):
+        if "full" in bath_cfg or "partial" in bath_cfg:
+            full_n = bath_cfg.get("full", 0) or 0
+            partial_n = bath_cfg.get("partial", 0) or 0
+            if full_n > 0:
+                items.append(
+                    (f"Bathrooms — Full ({full_n} × ${r['bathroom_full_remodel']:,})",
+                     full_n * r["bathroom_full_remodel"])
+                )
+            if partial_n > 0:
+                items.append(
+                    (f"Bathrooms — Partial ({partial_n} × ${r['bathroom_partial_remodel']:,})",
+                     partial_n * r["bathroom_partial_remodel"])
+                )
+        else:
+            items.append(
+                (f"Bathrooms ({baths:g} bath{'s' if baths != 1 else ''} × ${r['bathroom_full_remodel']:,})",
+                 baths * r["bathroom_full_remodel"])
+            )
 
     half = get("half_bathrooms")
     if half.get("include"):
@@ -1151,7 +1214,8 @@ def closing_pcts_for(acquisition_type: str, strategy: str, params: Dict[str, Any
     return ab, bc
 
 
-def compute_recommendation(inputs: Dict[str, Any]) -> Dict[str, Any]:
+def compute_recommendation(inputs: Dict[str, Any],
+                           force_strategy: Optional[str] = None) -> Dict[str, Any]:
     """Top-level orchestrator with LTC hard-money math + profit-at-asking logic.
 
     Required input keys:
@@ -1161,6 +1225,11 @@ def compute_recommendation(inputs: Dict[str, Any]) -> Dict[str, Any]:
       rehab: dict of toggles
       seller: {mtg1, mtg2, other_liens, payment_status, required_net, ...}
       params: optional dict to override DEFAULTS
+
+    If `force_strategy` is provided, that string is used instead of the result
+    of decide_strategy(). Useful for computing alternative-strategy pro-formas
+    in compute_alternatives() — lets the user compare Wholesale vs Novation
+    side-by-side on the same deal.
     """
     params = {**get_strategy_defaults(), **(inputs.get("params") or {})}
     prop = inputs["property"]
@@ -1171,13 +1240,14 @@ def compute_recommendation(inputs: Dict[str, Any]) -> Dict[str, Any]:
     sqft = prop.get("sqft", 0) or 0
     baths = prop.get("baths", 0) or 0
     pool = (prop.get("pool", "No") == "Yes")
+    stories = prop.get("stories", 1) or 1
     asking = prop.get("asking", 0) or 0
     hoa = prop.get("hoa", 0) or 0
     annual_taxes = prop.get("annual_taxes", 0) or 0
     acquisition_type = (prop.get("acquisition_type") or "Regular")
 
-    # Rehab
-    rehab_sub = rehab_subtotal(rehab, sqft, baths, pool)
+    # Rehab — roof footprint depends on # of stories
+    rehab_sub = rehab_subtotal(rehab, sqft, baths, pool, stories=stories)
     rehab_total = rehab_with_contingency(rehab_sub)
 
     # Loan / financing params
@@ -1299,20 +1369,25 @@ def compute_recommendation(inputs: Dict[str, Any]) -> Dict[str, Any]:
     if is_short_sale_acq:
         # User explicitly chose short sale; pick best disposition
         if eff_scope == "Heavy" or rehab_total > params.get("scope_heavy_min", 80_000):
-            strategy = "Short Sale → Wholesale (Double Close)"
+            auto_strategy = "Short Sale → Wholesale (Double Close)"
         elif pb == "NO-GO":
-            strategy = "Short Sale → Wholesale (Double Close)" if pb != "NO-GO" else (
+            auto_strategy = "Short Sale → Wholesale (Double Close)" if pb != "NO-GO" else (
                 "MLS Referral" if mls_ok else "NO-GO — Pass"
             )
         else:
             # Light/moderate scope + clears profit floor → close + rehab + retail
-            strategy = "Short Sale → Rehab"
+            auto_strategy = "Short Sale → Rehab"
     else:
-        strategy = decide_strategy(
+        auto_strategy = decide_strategy(
             pb, distress, asking, gap, nov_ok, nov_profit, mls_ok,
             benchmark, wholesale_offer, eff_scope,
             params["default_assignment_fee"], assignable, buyer_prefers_dc, params,
         )
+
+    # Allow the caller to override the auto-decided strategy. This is how
+    # compute_alternatives() reuses this function to produce side-by-side
+    # comparison cards (e.g. "what would Novation look like on this deal?").
+    strategy = force_strategy or auto_strategy
 
     # Strategy-specific closing %s for the actual recommendation
     ab_strat, bc_strat = closing_pcts_for(acquisition_type, strategy, params)
@@ -1441,6 +1516,8 @@ def compute_recommendation(inputs: Dict[str, Any]) -> Dict[str, Any]:
     return {
         # Headline
         "strategy": strategy,
+        "auto_strategy": auto_strategy,
+        "is_forced": bool(force_strategy) and force_strategy != auto_strategy,
         "rationale": rationale_text(strategy, rationale_ctx),
         "disposition": disposition_text(strategy),
         "action_items": action_items_for(strategy),
@@ -1511,3 +1588,83 @@ def compute_recommendation(inputs: Dict[str, Any]) -> Dict[str, Any]:
         "mls_feasible": mls_ok,
         "benchmark": benchmark,
     }
+
+
+def compute_alternatives(inputs: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Return a list of recommendation dicts, one per *viable* strategy for
+    this deal. The first entry is always the tool's primary recommendation
+    (from auto_strategy). Subsequent entries are alternative qualifying paths
+    so the user can compare side-by-side and pick.
+
+    Examples of when alternatives surface:
+      - A deal qualifies for both Wholesale Assignment and Novation
+        (seller's asking ≤ novation max ask, AND wholesale math works)
+      - A heavy-scope deal where either Assignment or DC could work
+      - A deal that would normally be Rehab but Novation profit is higher
+
+    Each alternative dict has the same shape as compute_recommendation()
+    (with `is_forced=True` if it differs from the auto-decided strategy),
+    so the UI can render each as a comparison card and offer a "Use this
+    strategy" button.
+    """
+    primary = compute_recommendation(inputs)
+    auto = primary["auto_strategy"]
+    results = [primary]
+
+    # Build the candidate list — strategies viable for this deal that aren't
+    # the auto-recommended one. We're permissive here: even if novation/MLS
+    # are flagged not-strictly-feasible, surface them as informational
+    # alternatives when the math pencils, so the user can compare and decide.
+    candidates = []
+    params = {**get_strategy_defaults(), **(inputs.get("params") or {})}
+
+    if "Novation" not in auto:
+        nov_profit = primary.get("novation_profit", 0) or 0
+        nov_max = primary.get("novation_max_asking", 0) or 0
+        asking_for_nov = (inputs.get("property") or {}).get("asking", 0) or 0
+        # Show novation alternative when (a) profit is meaningful AND
+        # (b) seller's asking fits under the novation ceiling. The "feasible"
+        # flag is stricter (caps rehab scope) — but Jo can still see the
+        # comparison even on heavy-scope deals.
+        nov_floor = params.get("novation_min_floor", 10_000)
+        if nov_profit >= nov_floor and (asking_for_nov == 0 or asking_for_nov <= nov_max):
+            pref = params.get("novation_preferred_target", 30_000)
+            candidates.append("Novation" if nov_profit >= pref else "Novation — Marginal")
+
+    if "MLS" not in auto:
+        mls_comm = primary.get("mls_commission_estimate", 0) or 0
+        if mls_comm >= params.get("mls_min_commission", 8_000):
+            candidates.append("MLS Referral")
+
+    # If the auto strategy is one wholesale flavor, surface the other as an
+    # alternative so the user sees the trade-off.
+    asking = (inputs.get("property") or {}).get("asking", 0) or 0
+    if "Wholesale — Assignment" in auto and asking > 0:
+        candidates.append("Wholesale — Double Close")
+    elif "Double Close" in auto and asking > 0:
+        candidates.append("Wholesale — Assignment")
+
+    # If the auto is wholesale but rehab math is positive, surface Rehab too.
+    if (("Wholesale" in auto or "Pass" in auto)
+            and (primary.get("net_profit_at_mao") or 0) > 0
+            and "Rehab" not in auto):
+        candidates.append("Rehab")
+
+    seen = {auto}
+    for strat in candidates:
+        if strat in seen:
+            continue
+        seen.add(strat)
+        try:
+            alt = compute_recommendation(inputs, force_strategy=strat)
+            # Don't include if the math doesn't pencil (negative profit for
+            # buy-side strategies, etc.) — but keep Novation/MLS even at
+            # marginal profit because they're informational comparisons.
+            np = alt.get("net_profit", 0) or 0
+            if "Novation" in strat or "MLS" in strat or np >= 0:
+                results.append(alt)
+        except Exception:
+            # If forcing a strategy throws (e.g. math edge case), skip it.
+            continue
+
+    return results
