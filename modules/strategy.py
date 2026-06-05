@@ -67,7 +67,7 @@ DEFAULTS = {
     "scope_light_max": 20_000,
     "scope_heavy_min": 80_000,
     "dc_assignment_fee_threshold": 25_000,
-    "novation_rehab_cap": 20_000,
+    "novation_rehab_cap": 30_000,
     "mls_rehab_pct_of_arv": 0.08,
     "mls_min_commission": 8_000,
     "mls_commission_rate": 0.03,
@@ -686,8 +686,23 @@ def equity_position(arv: float, mortgages: float, liens: float) -> float:
 
 
 def distress_flag(equity: float, payment_status: str) -> bool:
+    """True only when the seller is BOTH underwater AND in active distress —
+    i.e. a true short-sale candidate where the bank will need to take a haircut.
+
+    A high-equity foreclosure is NOT a short sale candidate: the bank gets paid
+    off in full at closing and the seller walks with their equity, so the deal
+    routes through the normal Rehab / Wholesale / Novation paths instead. The
+    distress status still drives urgency framing in the call but does not
+    override strategy selection.
+
+    The $25k cushion below "underwater" accounts for closing costs eating into
+    the payoff room — even at +$15k equity, by the time you cover commissions
+    and seller costs there may not be enough to pay the bank in full.
+    """
     distress_statuses = {"60+", "90+", "NOD", "Foreclosure"}
-    return equity <= 0 or payment_status in distress_statuses
+    is_underwater_or_marginal = equity <= 25_000
+    has_distress_status = payment_status in distress_statuses
+    return is_underwater_or_marginal and has_distress_status
 
 
 def gap_category(gap: float, params: Dict) -> str:
@@ -1500,6 +1515,37 @@ def compute_recommendation(inputs: Dict[str, Any],
         recommended_fee = None
         fee_note = ""
 
+    # Recompute Deal Status against the FINAL strategy's net profit.
+    # The earlier status was computed against rehab-math placeholders before
+    # we routed to the actual strategy (Assignment/DC/Novation/Short Sale).
+    # A strategy that nets a loss must never read "GO" — that's the bug we
+    # saw on the Lake Worth memo (Short Sale → DC, −$24,500, status GO).
+    # For wholesale assignments we use the default-fee floor as the GO bar
+    # instead of the buy-and-hold min_profit_threshold (since assignments
+    # use zero capital — $15k on $0 capital is an excellent return).
+    if proforma_kind == "assignment":
+        assignment_go_floor = params.get("default_assignment_fee", 15_000)
+        if net_profit >= assignment_go_floor:
+            status = "GO"
+            status_reason = (f"Assignment fee of ${net_profit:,.0f} clears the "
+                             f"${assignment_go_floor:,.0f} floor — zero capital, "
+                             "no rehab risk on our side.")
+        elif net_profit >= max(2_000, assignment_go_floor * 0.4):
+            status = "CAUTION"
+            status_reason = (f"Assignment fee ${net_profit:,.0f} below the "
+                             f"${assignment_go_floor:,.0f} floor — flex price "
+                             "or push for a higher end-buyer.")
+        else:
+            status = "NO-GO"
+            status_reason = (f"Assignment fee ${net_profit:,.0f} too thin — "
+                             "pivot to DC or pass.")
+    else:
+        status, status_reason = deal_status(net_profit, roi, params)
+        if net_profit < 0:
+            status = "NO-GO"
+            status_reason = (f"Strategy nets a loss of ${abs(net_profit):,.0f}. "
+                             "Closing/financing costs exceed the spread — pivot or pass.")
+
     # Rationale context
     rationale_ctx = {
         "params": params, "net_profit": net_profit, "rehab_total": rehab_total,
@@ -1636,18 +1682,20 @@ def compute_alternatives(inputs: Dict[str, Any]) -> List[Dict[str, Any]]:
         if mls_comm >= params.get("mls_min_commission", 8_000):
             candidates.append("MLS Referral")
 
-    # If the auto strategy is one wholesale flavor, surface the other as an
-    # alternative so the user sees the trade-off.
+    # Surface both wholesale flavors (Assignment + Double Close) whenever the
+    # auto is something other than wholesale, so the user can see what a quick
+    # exit would look like. If the auto IS wholesale, surface the OTHER flavor.
     asking = (inputs.get("property") or {}).get("asking", 0) or 0
-    if "Wholesale — Assignment" in auto and asking > 0:
-        candidates.append("Wholesale — Double Close")
-    elif "Double Close" in auto and asking > 0:
-        candidates.append("Wholesale — Assignment")
+    if asking > 0:
+        if "Wholesale — Assignment" not in auto and "Short Sale" not in auto:
+            candidates.append("Wholesale — Assignment")
+        if "Double Close" not in auto and "Short Sale" not in auto:
+            candidates.append("Wholesale — Double Close")
 
-    # If the auto is wholesale but rehab math is positive, surface Rehab too.
-    if (("Wholesale" in auto or "Pass" in auto)
-            and (primary.get("net_profit_at_mao") or 0) > 0
-            and "Rehab" not in auto):
+    # Surface Rehab as an alternative whenever the rehab math nets positive
+    # profit. Useful comparison even when the auto pick is Novation / MLS /
+    # Wholesale — you can see what the long-hold profit would have been.
+    if (primary.get("net_profit_at_mao") or 0) > 0 and "Rehab" not in auto:
         candidates.append("Rehab")
 
     seen = {auto}

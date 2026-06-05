@@ -819,22 +819,19 @@ with st.expander("💬 Brainstorm with Claude about this deal", expanded=False):
                     st.session_state._chat_pending = prompt
                     st.rerun()
 
-        # Display chat history
+        # Display chat history (every message that's already been exchanged)
         for msg in st.session_state.chat_history:
             with st.chat_message(msg["role"]):
                 st.markdown(msg["content"])
 
-        # Process pending message (from suggested-prompt button) and stream response
+        # If there's a pending user message — either from a suggested-prompt
+        # button click OR from a chat_input submission on the previous run —
+        # stream Claude's response inline. The user message is already in
+        # chat_history (the suggested-prompt button or chat_input handler
+        # added it). We just render the streaming assistant message here so
+        # it appears above the input box.
         pending = st.session_state.pop("_chat_pending", None)
-        user_input = st.chat_input("Ask Claude about this deal...")
-
-        if pending or user_input:
-            new_msg = pending or user_input
-            if user_input and not pending:
-                st.session_state.chat_history.append({"role": "user", "content": new_msg})
-                with st.chat_message("user"):
-                    st.markdown(new_msg)
-            # Stream Claude's response
+        if pending:
             with st.chat_message("assistant"):
                 placeholder = st.empty()
                 full_response = ""
@@ -842,9 +839,11 @@ with st.expander("💬 Brainstorm with Claude about this deal", expanded=False):
                     system_prompt = chat_mod.build_system_prompt(
                         property_dict, rec, seller_dict, rehab_items=items
                     )
-                    # History to send (excludes the message we just added)
+                    # History to send (excludes the user message we just added)
                     history_for_api = st.session_state.chat_history[:-1]
-                    for chunk in chat_mod.stream_response(system_prompt, history_for_api, new_msg):
+                    for chunk in chat_mod.stream_response(
+                        system_prompt, history_for_api, pending
+                    ):
                         full_response += chunk
                         placeholder.markdown(full_response + " ▌")
                     placeholder.markdown(full_response)
@@ -854,8 +853,21 @@ with st.expander("💬 Brainstorm with Claude about this deal", expanded=False):
                 except Exception as e:
                     placeholder.error(f"Chat error: {e}")
 
-        # Clear chat button
+        # Clear chat button — render BEFORE chat_input so chat_input always
+        # sits dead last in the column. (Streamlit renders top-to-bottom.)
         if st.session_state.chat_history:
             if st.button("🗑 Clear chat", key="clear_chat"):
                 st.session_state.chat_history = []
                 st.rerun()
+
+        # Chat input — placed LAST so it always sits at the bottom of the
+        # conversation, below Claude's most recent reply. Submitting just
+        # queues the message via _chat_pending and reruns; the streaming
+        # happens at the top of the next run (above this input).
+        user_input = st.chat_input("Ask Claude about this deal...")
+        if user_input:
+            st.session_state.chat_history.append(
+                {"role": "user", "content": user_input}
+            )
+            st.session_state._chat_pending = user_input
+            st.rerun()
