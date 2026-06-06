@@ -61,7 +61,8 @@ def build_checklist_pdf(
     from reportlab.lib.units import inch
     from reportlab.lib import colors
     from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer,
-                                     Table, TableStyle, KeepTogether)
+                                     Table, TableStyle, KeepTogether,
+                                     PageBreak)
     from reportlab.lib.enums import TA_CENTER, TA_LEFT
 
     buf = BytesIO()
@@ -280,6 +281,222 @@ def build_checklist_pdf(
         story.append(Spacer(1, 6))
         story.append(Paragraph("<b>Manager's Coaching Note:</b>", notes_body_s))
         story.append(Paragraph(coaching_note, notes_body_s))
+
+    # ======================================================================
+    # PAGE 2+ — SUPPLEMENTAL ANALYSIS
+    # Everything the AI generated that isn't already in the checklist —
+    # so the printed/exported PDF is the COMPLETE coaching artifact and
+    # nothing is hidden behind the Call Reviews UI.
+    # ======================================================================
+    story.append(PageBreak())
+
+    # Reuse some styles, define a couple more for this section
+    h2_s = ParagraphStyle(
+        "H2", parent=styles["Heading2"], fontName="Helvetica-Bold", fontSize=13,
+        textColor=colors.HexColor("#1F4E78"), spaceBefore=10, spaceAfter=4,
+    )
+    h3_s = ParagraphStyle(
+        "H3", parent=styles["Heading3"], fontName="Helvetica-Bold", fontSize=11,
+        textColor=colors.HexColor("#222222"), spaceBefore=6, spaceAfter=2,
+    )
+    body_s = ParagraphStyle(
+        "Body", parent=styles["Normal"], fontSize=10,
+        textColor=colors.HexColor("#222222"), spaceAfter=4, leading=13,
+    )
+    quote_s = ParagraphStyle(
+        "Quote", parent=body_s, fontSize=9, textColor=colors.HexColor("#555555"),
+        leftIndent=14, italic=True, spaceAfter=4,
+    )
+    bullet_s = ParagraphStyle(
+        "Bullet", parent=body_s, leftIndent=14, bulletIndent=0,
+    )
+    caption_grey_s = ParagraphStyle(
+        "Cap", parent=body_s, fontSize=9,
+        textColor=colors.HexColor("#888888"),
+    )
+
+    def _safe(text: Any) -> str:
+        """Escape characters that confuse reportlab's mini-HTML parser."""
+        s = "" if text is None else str(text)
+        return (s.replace("&", "&amp;")
+                 .replace("<", "&lt;")
+                 .replace(">", "&gt;"))
+
+    # --- Page header --------------------------------------------------
+    story.append(Paragraph("Supplemental Analysis", title_s))
+    story.append(Paragraph(
+        "Everything the AI flagged about this call, beyond the checklist.",
+        sub_s,
+    ))
+    summary_line = analysis.get("summary_one_line", "")
+    if summary_line:
+        story.append(Paragraph(f"<i>{_safe(summary_line)}</i>", body_s))
+    story.append(Spacer(1, 6))
+    story.append(Paragraph(
+        f"<b>Overall grade:</b> {_safe(analysis.get('overall_grade', '—'))} "
+        f"&nbsp;&nbsp; "
+        f"<b>Contract likelihood:</b> "
+        f"{_safe(analysis.get('contract_likelihood_pct', '—'))}%",
+        body_s,
+    ))
+
+    # --- 1. UMBC Qualification ---------------------------------------
+    umbc = analysis.get("umbc", {}) or {}
+    if umbc:
+        story.append(Paragraph("UMBC Qualification", h2_s))
+        umbc_labels = {
+            "urgency": "U — Urgency",
+            "motivation": "M — Motivation",
+            "ballpark": "B — Ballpark",
+            "condition": "C — Condition",
+        }
+        for key, label in umbc_labels.items():
+            sect = umbc.get(key, {}) or {}
+            score = _safe(sect.get("score", "—"))
+            note = _safe(sect.get("note", ""))
+            story.append(Paragraph(f"<b>{label}</b> — {score}", h3_s))
+            if note:
+                story.append(Paragraph(note, body_s))
+            evidence = sect.get("evidence") or sect.get("seller_quoted_price")
+            if evidence and evidence not in ("not asked", ""):
+                story.append(Paragraph(f"Evidence: \"{_safe(evidence)}\"", quote_s))
+            if key == "motivation":
+                cats = sect.get("categories_found") or []
+                if cats:
+                    story.append(Paragraph(
+                        f"Categories surfaced: {_safe(', '.join(cats))}",
+                        caption_grey_s,
+                    ))
+            if key == "condition":
+                ic = sect.get("items_covered_count")
+                if ic is not None:
+                    story.append(Paragraph(
+                        f"Property condition items covered: {_safe(ic)} / 16",
+                        caption_grey_s,
+                    ))
+
+    # --- 2. Pain Points Identified -----------------------------------
+    pains = analysis.get("pain_points_identified", []) or []
+    if pains:
+        story.append(Paragraph("Pain Points Revealed", h2_s))
+        for p in pains:
+            cat = _safe(p.get("category", "—"))
+            followed = "✓ rep followed up" if p.get("rep_followed_up") else "✗ rep did NOT follow up"
+            quality = _safe(p.get("rep_response_quality", ""))
+            story.append(Paragraph(
+                f"<b>{cat}</b> — {followed} ({quality})", body_s,
+            ))
+            q = p.get("seller_quote") or ""
+            if q:
+                story.append(Paragraph(f"\"{_safe(q)}\"", quote_s))
+
+    # --- 3. What the Rep Did Well ------------------------------------
+    well = analysis.get("what_rep_did_well", []) or []
+    if well:
+        story.append(Paragraph("What the Rep Did Well", h2_s))
+        for w in well:
+            moment = _safe(w.get("moment", "—"))
+            why = _safe(w.get("why_good", ""))
+            story.append(Paragraph(f"<b>{moment}</b>", h3_s))
+            if why:
+                story.append(Paragraph(why, body_s))
+            q = w.get("quote_or_timestamp") or ""
+            if q:
+                story.append(Paragraph(f"\"{_safe(q)}\"", quote_s))
+
+    # --- 4. What the Rep Missed --------------------------------------
+    missed = analysis.get("what_rep_missed", []) or []
+    if missed:
+        story.append(Paragraph("What the Rep Missed", h2_s))
+        for m in missed:
+            moment = _safe(m.get("moment", "—"))
+            story.append(Paragraph(f"<b>{moment}</b>", h3_s))
+            ctx = m.get("quote_or_context") or ""
+            if ctx:
+                story.append(Paragraph(f"Context: \"{_safe(ctx)}\"", quote_s))
+            fit = m.get("what_should_have_fit") or ""
+            if fit:
+                story.append(Paragraph(
+                    f"<b>Should have:</b> {_safe(fit)}", body_s,
+                ))
+
+    # --- 5. Objections Encountered -----------------------------------
+    objs = analysis.get("objections_encountered", []) or []
+    if objs:
+        story.append(Paragraph("Objections Encountered", h2_s))
+        for o in objs:
+            otype = _safe(o.get("objection_type", "—"))
+            framework = _safe(o.get("framework_used", "—"))
+            ok = "✓ handled well" if o.get("handled_well") else "✗ mishandled"
+            story.append(Paragraph(
+                f"<b>{otype}</b> — {ok} (framework: <i>{framework}</i>)",
+                body_s,
+            ))
+            q = o.get("seller_quote") or ""
+            if q:
+                story.append(Paragraph(f"\"{_safe(q)}\"", quote_s))
+            note = o.get("note") or ""
+            if note:
+                story.append(Paragraph(_safe(note), body_s))
+
+    # --- 6. Non-Committal Language Detected --------------------------
+    ncl = analysis.get("non_committal_language_detected", []) or []
+    if ncl:
+        story.append(Paragraph("Non-Committal Language Detected", h2_s))
+        for n in ncl:
+            phrase = _safe(n.get("seller_phrase", ""))
+            story.append(Paragraph(
+                f"Seller said: \"{phrase}\"", body_s,
+            ))
+            rep_resp = n.get("rep_response") or ""
+            if rep_resp:
+                story.append(Paragraph(
+                    f"Rep response: {_safe(rep_resp)}", body_s,
+                ))
+            should = n.get("should_have") or ""
+            if should:
+                story.append(Paragraph(
+                    f"<b>Should have:</b> {_safe(should)}", body_s,
+                ))
+
+    # --- 7. Next-Call Tactical Recommendations -----------------------
+    nexts = analysis.get("next_call_recommendations", []) or []
+    if nexts:
+        story.append(Paragraph("Next-Call Tactical Recommendations", h2_s))
+        for i, rec_item in enumerate(nexts, 1):
+            play = _safe(rec_item.get("play", "—"))
+            story.append(Paragraph(f"<b>{i}. {play}</b>", h3_s))
+            phrasing = rec_item.get("specific_phrasing") or ""
+            if phrasing:
+                story.append(Paragraph(
+                    f"Specific phrasing: \"{_safe(phrasing)}\"", quote_s,
+                ))
+            outcome = rec_item.get("expected_outcome") or ""
+            if outcome:
+                story.append(Paragraph(
+                    f"Expected outcome: {_safe(outcome)}", body_s,
+                ))
+
+    # --- 8. Qualification Verdict ------------------------------------
+    qv = analysis.get("qualification_verdict", {}) or {}
+    if qv:
+        story.append(Paragraph("Qualification Verdict", h2_s))
+        story.append(Paragraph(
+            f"<b>Qualified:</b> {'Yes' if qv.get('qualified') else 'No'}  "
+            f"&nbsp; <b>Path taken:</b> {_safe(qv.get('path_taken', '—'))}  "
+            f"&nbsp; <b>Routing correct?</b> "
+            f"{'Yes' if qv.get('was_routing_correct') else 'No'}",
+            body_s,
+        ))
+        note = qv.get("note") or ""
+        if note:
+            story.append(Paragraph(_safe(note), body_s))
+
+    # --- 9. Tonality Assessment --------------------------------------
+    tone = analysis.get("tonality_assessment", "")
+    if tone:
+        story.append(Paragraph("Tonality Assessment", h2_s))
+        story.append(Paragraph(_safe(tone), body_s))
 
     doc.build(story)
     return buf.getvalue()
