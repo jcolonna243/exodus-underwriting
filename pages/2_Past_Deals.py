@@ -80,29 +80,51 @@ if selected_id > 0:
             for j, (label, value) in enumerate(metrics[i:i + 4]):
                 cols[j].metric(label, value)
 
-        c1, c2, c3 = st.columns(3)
+        # Action row — Edit / Word memo / PDF memo / Delete
+        c_edit, c_word, c_pdf, c_del = st.columns(4)
+
+        # Edit — queue the deal for loading on New Deal page and switch.
+        # No RentCast call needed; comps and inputs are restored from JSONB.
+        if c_edit.button(
+            "✏️ Open in editor",
+            use_container_width=True,
+            type="primary",
+            help="Reopen this deal on the New Deal page with every "
+                 "assumption, rehab toggle, and comp prepopulated. Edit "
+                 "anything, then click 'Save changes' to update the deal "
+                 "in place — no new row, no fresh comp pull.",
+        ):
+            st.session_state["_pending_deal_load"] = int(deal["id"])
+            try:
+                st.switch_page("pages/1_New_Deal.py")
+            except Exception:
+                # Streamlit < 1.30 fallback — show a manual nav prompt
+                st.info(
+                    "Deal queued. Open the **New Deal** page from the "
+                    "left sidebar to continue editing."
+                )
 
         try:
             word_bytes = build_word_memo(prop, outputs, seller)
-            c1.download_button(
-                "📄 Re-download Word memo", word_bytes,
+            c_word.download_button(
+                "📄 Word memo", word_bytes,
                 file_name=f"Exodus_Memo_Deal_{deal['id']}.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 use_container_width=True)
         except Exception as e:
-            c1.error(f"Word: {e}")
+            c_word.error(f"Word: {e}")
 
         try:
             pdf_bytes = build_pdf_memo(prop, outputs, seller)
-            c2.download_button(
-                "📄 Re-download PDF memo", pdf_bytes,
+            c_pdf.download_button(
+                "📄 PDF memo", pdf_bytes,
                 file_name=f"Exodus_Memo_Deal_{deal['id']}.pdf",
                 mime="application/pdf",
                 use_container_width=True)
         except Exception as e:
-            c2.error(f"PDF: {e}")
+            c_pdf.error(f"PDF: {e}")
 
-        if c3.button("🗑 Delete this deal", use_container_width=True):
+        if c_del.button("🗑 Delete", use_container_width=True):
             if delete_deal(int(selected_id)):
                 st.success(f"Deal #{selected_id} deleted.")
                 st.rerun()

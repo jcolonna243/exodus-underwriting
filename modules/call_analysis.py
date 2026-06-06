@@ -122,6 +122,40 @@ JSON. The schema is:
   "overall_grade": "A" | "B" | "C" | "D" | "F",
   "contract_likelihood_pct": integer 0-100,
 
+  "process_call_checklist": {{
+    "applicable": true | false,
+    "applicable_note": "string — if not applicable, briefly why (e.g. 'This was an Offer Call, not a Process Call')",
+    "intro": {{ "covered": true | false, "feedback": "string — short, specific" }},
+    "set_expectations_open": {{
+      "time": {{ "covered": true | false, "feedback": "string" }},
+      "agenda": {{ "covered": true | false, "feedback": "string" }},
+      "result": {{ "covered": true | false, "feedback": "string" }},
+      "permission_to_say_no": {{ "covered": true | false, "feedback": "string" }},
+      "urgency": {{ "covered": true | false, "feedback": "string" }}
+    }},
+    "motivation": {{
+      "situation": {{ "covered": true | false, "feedback": "string — did rep ask 'What's got you thinking about selling?'" }},
+      "impact_1": {{ "covered": true | false, "feedback": "string — first Impact question used" }},
+      "impact_2": {{ "covered": true | false, "feedback": "string — second Impact question used" }},
+      "impact_3": {{ "covered": true | false, "feedback": "string — third Impact question used" }},
+      "perfect_picture": {{ "covered": true | false, "feedback": "string — did rep ask the Picture Perfect/Goal question?" }}
+    }},
+    "property_condition": {{ "covered": true | false, "feedback": "string — number of 16 items covered and any pushback handling" }},
+    "road_blocks": {{
+      "time": {{ "covered": true | false, "feedback": "string — Timeline asked verbatim with 21-24 day anchor?" }},
+      "influencers": {{ "covered": true | false, "feedback": "string — and if any, were they double/triple-confirmed?" }},
+      "discomfort": {{ "covered": true | false, "feedback": "string — 'What's next thing you have to figure out?'" }},
+      "money": {{ "covered": true | false, "feedback": "string — feel/fair language used? Common-enemy framing?" }}
+    }},
+    "set_expectations_close": {{
+      "time": {{ "covered": true | false, "feedback": "string — 20-30 min to talk to partners, then 5 min callback?" }},
+      "agenda": {{ "covered": true | false, "feedback": "string" }},
+      "result": {{ "covered": true | false, "feedback": "string — confident yes/no expected" }},
+      "permission_to_say_no": {{ "covered": true | false, "feedback": "string — 'no is perfectly okay'" }}
+    }},
+    "notes": "string — short paragraph synthesizing the checklist into 1-2 actionable takeaways"
+  }},
+
   "umbc": {{
     "urgency": {{
       "score": "Strong" | "Adequate" | "Weak" | "Missed",
@@ -334,6 +368,73 @@ SCORE_EMOJI = {
 }
 
 
+def _check(item: Dict[str, Any], label: str) -> str:
+    """Render one checklist row as a Markdown line."""
+    covered = bool((item or {}).get("covered", False))
+    feedback = (item or {}).get("feedback", "") or ""
+    icon = "✅" if covered else "❌"
+    return f"- {icon} **{label}** — {feedback}".rstrip()
+
+
+def format_process_call_checklist(analysis: Dict[str, Any]) -> str:
+    """Render the Results Driven Process Call Checklist as a visual list.
+    Returns empty string if not applicable to this call type."""
+    cl = analysis.get("process_call_checklist", {}) or {}
+    if not cl.get("applicable", False):
+        note = cl.get("applicable_note", "")
+        return ("### Process Call Checklist\n*Not applicable for this call type."
+                + (f" — {note}*" if note else "*"))
+
+    out = ["### Process Call Checklist"]
+
+    # Intro
+    out.append(_check(cl.get("intro"), "Intro"))
+
+    # Set Expectations (open)
+    se_open = cl.get("set_expectations_open", {}) or {}
+    out.append("**Set Expectations (open)**")
+    out.append(_check(se_open.get("time"), "Time"))
+    out.append(_check(se_open.get("agenda"), "Agenda"))
+    out.append(_check(se_open.get("result"), "Result"))
+    out.append(_check(se_open.get("permission_to_say_no"), "Permission to say No"))
+    out.append(_check(se_open.get("urgency"), "Urgency"))
+
+    # Motivation
+    mot = cl.get("motivation", {}) or {}
+    out.append("**Motivation**")
+    out.append(_check(mot.get("situation"), "Situation"))
+    out.append(_check(mot.get("impact_1"), "Impact 1"))
+    out.append(_check(mot.get("impact_2"), "Impact 2"))
+    out.append(_check(mot.get("impact_3"), "Impact 3"))
+    out.append(_check(mot.get("perfect_picture"), "Perfect Picture / Goal"))
+
+    # Property Condition
+    out.append(_check(cl.get("property_condition"), "Property Condition"))
+
+    # Road Blocks
+    rb = cl.get("road_blocks", {}) or {}
+    out.append("**Road Blocks**")
+    out.append(_check(rb.get("time"), "Time"))
+    out.append(_check(rb.get("influencers"), "Influencers"))
+    out.append(_check(rb.get("discomfort"), "Discomfort"))
+    out.append(_check(rb.get("money"), "Money"))
+
+    # Set Expectations (close)
+    se_close = cl.get("set_expectations_close", {}) or {}
+    out.append("**Set Expectations (close)**")
+    out.append(_check(se_close.get("time"), "Time"))
+    out.append(_check(se_close.get("agenda"), "Agenda"))
+    out.append(_check(se_close.get("result"), "Result"))
+    out.append(_check(se_close.get("permission_to_say_no"), "Permission to say No"))
+
+    notes = cl.get("notes", "")
+    if notes:
+        out.append("")
+        out.append(f"**Notes:** {notes}")
+
+    return "\n".join(out)
+
+
 def format_umbc_section(analysis: Dict[str, Any]) -> str:
     """Compact UMBC scorecard for display."""
     umbc = analysis.get("umbc", {}) or {}
@@ -454,6 +555,8 @@ def format_full_analysis(analysis: Dict[str, Any]) -> str:
         f"## Call Analysis — Grade **{analysis.get('overall_grade', '—')}** · "
         f"Contract Likelihood **{analysis.get('contract_likelihood_pct', '—')}%**",
         f"*{analysis.get('summary_one_line', '')}*",
+        "",
+        format_process_call_checklist(analysis),
         "",
         format_umbc_section(analysis),
         "",

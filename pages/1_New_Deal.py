@@ -39,7 +39,146 @@ if st.session_state.pop("_pending_reset", False):
             pass
     st.toast("✅ Form reset.", icon="🧹")
 
+
+# --- Deal-edit handler ---------------------------------------------------
+# When the user clicks "Open in editor" on Past Deals, that page sets
+# _pending_deal_load = deal_id and switches here. We must populate every
+# widget's session_state key BEFORE the widget renders for the first time —
+# Streamlit reads widget defaults from session_state at construction time.
+def _preload_deal(deal_id: int) -> bool:
+    """Pull a deal from Supabase and populate every form-field key in
+    session_state. Returns True if the deal was found and loaded."""
+    from modules.db import get_deal as _get_deal
+    deal = _get_deal(int(deal_id))
+    if not deal:
+        return False
+
+    inputs = deal.get("inputs", {}) or {}
+    outputs = deal.get("outputs", {}) or {}
+    prop = inputs.get("property", {}) or {}
+    seller = inputs.get("seller", {}) or {}
+    rehab = inputs.get("rehab", {}) or {}
+
+    # --- 1. Wipe any existing widget state so old values don't bleed in ---
+    # We keep app-level keys (auth, role badge, etc.) intact.
+    _stale = [k for k in list(st.session_state.keys())
+              if not k.startswith("_st_")
+              and k not in ("loaded_deal_id",)
+              and not k.startswith("FormSubmitter:")]
+    for k in _stale:
+        try:
+            del st.session_state[k]
+        except Exception:
+            pass
+
+    # --- 2. Property fields ---
+    st.session_state["address"] = prop.get("address", "")
+    st.session_state["city"] = prop.get("city", "")
+    st.session_state["state"] = prop.get("state", "FL")
+    st.session_state["zip"] = str(prop.get("zip", ""))
+    st.session_state["beds"] = int(prop.get("beds", 3) or 3)
+    st.session_state["baths"] = float(prop.get("baths", 2.0) or 2.0)
+    st.session_state["sqft"] = int(prop.get("sqft", 1500) or 1500)
+    st.session_state["year"] = int(prop.get("year", 1980) or 1980)
+    _stories = prop.get("stories", 1) or 1
+    try:
+        _stories = float(_stories)
+        if _stories not in (1, 1.5, 2):
+            _stories = 1
+    except (TypeError, ValueError):
+        _stories = 1
+    st.session_state["stories"] = _stories
+    st.session_state["pool"] = prop.get("pool", "No")
+    st.session_state["hoa"] = int(prop.get("hoa", 0) or 0)
+    st.session_state["annual_taxes"] = int(prop.get("annual_taxes", 0) or 0)
+    st.session_state["asking"] = int(prop.get("asking", 0) or 0)
+    st.session_state["property_type"] = prop.get("property_type", "Single Family Residence")
+    st.session_state["waterfront"] = prop.get("waterfront", "No")
+    st.session_state["garage_spaces"] = int(prop.get("garage_spaces", 0) or 0)
+    st.session_state["acquisition_type"] = prop.get("acquisition_type", "Regular")
+
+    # --- 3. Rehab toggles ---
+    # The rehab dict lives in session_state.rehab and drives the _toggle()
+    # helper. We also need to set each widget's individual key because the
+    # checkbox/selectbox/qty inputs read from those keys directly.
+    st.session_state["rehab"] = rehab
+    for r_key, cfg in (rehab or {}).items():
+        cfg = cfg or {}
+        st.session_state[f"rehab_{r_key}_include"] = bool(cfg.get("include", False))
+        if "type" in cfg:
+            st.session_state[f"rehab_{r_key}_type"] = cfg["type"]
+        if "qty" in cfg:
+            st.session_state[f"rehab_{r_key}_qty"] = cfg["qty"]
+        if "amount" in cfg:
+            st.session_state[f"rehab_{r_key}_amount"] = cfg["amount"]
+        # Bathrooms have a Full + Partial split (v8)
+        if r_key == "bathrooms":
+            if "full" in cfg:
+                st.session_state["rehab_bath_full"] = int(cfg["full"] or 0)
+            if "partial" in cfg:
+                st.session_state["rehab_bath_partial"] = int(cfg["partial"] or 0)
+
+    # --- 4. Seller fields ---
+    st.session_state["mtg1"] = int(seller.get("mtg1", 0) or 0)
+    st.session_state["mtg2"] = int(seller.get("mtg2", 0) or 0)
+    st.session_state["other_liens"] = int(seller.get("other_liens", 0) or 0)
+    st.session_state["payment_status"] = seller.get("payment_status", "Current")
+    st.session_state["required_net"] = int(seller.get("required_net", 0) or 0)
+    st.session_state["timeline_days"] = int(seller.get("timeline_days", 30) or 30)
+    st.session_state["reason_for_selling"] = seller.get("reason_for_selling", "Other")
+    st.session_state["occupancy"] = seller.get("occupancy", "Owner")
+    st.session_state["condition_confirmed"] = seller.get("condition_confirmed", "No")
+    st.session_state["open_to_mls_listing"] = seller.get("open_to_mls_listing", "Yes")
+    st.session_state["buyer_demand_confirmed"] = seller.get("buyer_demand_confirmed", False)
+    st.session_state["buyer_prefers_dc"] = seller.get("buyer_prefers_dc", False)
+    st.session_state["assignable"] = seller.get("assignable", True)
+
+    # --- 5. Comps (CRITICAL — no RentCast re-pull) ---
+    saved_comps = inputs.get("comps")
+    if saved_comps:
+        import pandas as _pd
+        try:
+            st.session_state["comps_df"] = _pd.DataFrame(saved_comps)
+        except Exception:
+            pass
+
+    # --- 6. ARV + ARV method ---
+    arv_value = outputs.get("arv") or inputs.get("arv") or 0
+    if arv_value:
+        st.session_state["arv"] = float(arv_value)
+    arv_method = inputs.get("arv_method")
+    if arv_method:
+        st.session_state["arv_method"] = arv_method
+
+    # --- 7. Mark this deal as the one being edited ---
+    st.session_state["loaded_deal_id"] = int(deal_id)
+    return True
+
+
+_pending_load = st.session_state.pop("_pending_deal_load", None)
+if _pending_load:
+    if _preload_deal(int(_pending_load)):
+        st.toast(f"✏️ Editing deal #{_pending_load}", icon="✅")
+    else:
+        st.warning(f"Deal #{_pending_load} could not be loaded. "
+                   "It may have been deleted.")
+
+
 st.title("📝 New Deal Analysis")
+
+# Editor banner — only when we're editing an existing deal
+_editing_id = st.session_state.get("loaded_deal_id")
+if _editing_id:
+    c_banner, c_clear = st.columns([5, 1])
+    c_banner.info(
+        f"✏️ **Editing deal #{_editing_id}.** Make any changes, then click "
+        "**💾 Save changes** at the bottom. To leave edit mode and start "
+        "a new deal, click **✨ Start fresh** on the right."
+    )
+    if c_clear.button("✨ Start fresh", use_container_width=True,
+                       help="Exit editor mode and clear the form for a new deal."):
+        st.session_state["_pending_reset"] = True
+        st.rerun()
 
 # ============================================================================
 # 1. PROPERTY DETAILS
@@ -557,6 +696,15 @@ inputs_dict = {
     "rehab": st.session_state.rehab,
     "seller": seller_dict,
     "params": params_override,
+    # Round-trip data so re-opening a saved deal doesn't trigger a fresh
+    # RentCast pull (which would count against the monthly comp quota):
+    "comps": (
+        st.session_state.comps_df.to_dict("records")
+        if (st.session_state.get("comps_df") is not None
+            and hasattr(st.session_state.comps_df, "to_dict"))
+        else None
+    ),
+    "arv_method": st.session_state.get("arv_method"),
 }
 
 # Compute the tool's auto-recommendation PLUS any alternative qualifying
@@ -744,23 +892,69 @@ st.markdown("---")
 st.markdown("### 💾 Save & Export")
 c1, c2, c3, c4 = st.columns(4)
 
-if c1.button("Save deal to history", type="primary", use_container_width=True):
+# Context-aware button: "Save changes" when editing an existing deal,
+# "Save deal to history" when creating a new one. The handler dispatches
+# to either update_deal() or save_deal() based on whether loaded_deal_id
+# is set AND the deal still exists in the database.
+_editing_existing_deal = bool(st.session_state.get("loaded_deal_id"))
+_save_button_label = (
+    "💾 Save changes" if _editing_existing_deal else "Save deal to history"
+)
+
+if c1.button(_save_button_label, type="primary", use_container_width=True):
     if not address:
         st.error("Enter an address before saving.")
     else:
-        deal_id = save_deal(inputs_dict, rec, user_email=user.get("email"))
-        # Stash the new deal_id so the call-analysis section can attach
-        # uploaded calls to this deal (and load any prior calls saved
-        # against it).
-        st.session_state["loaded_deal_id"] = deal_id
+        from modules.db import update_deal
+        deal_id = st.session_state.get("loaded_deal_id")
+        was_update = False
+        if _editing_existing_deal:
+            ok = update_deal(int(deal_id), inputs_dict, rec,
+                              user_email=user.get("email"))
+            if ok:
+                was_update = True
+            else:
+                # Update returned no rows — the deal may have been deleted
+                # while we were editing. Fall back to a fresh insert so
+                # the work isn't lost.
+                deal_id = save_deal(inputs_dict, rec,
+                                     user_email=user.get("email"))
+                st.session_state["loaded_deal_id"] = deal_id
+        else:
+            deal_id = save_deal(inputs_dict, rec, user_email=user.get("email"))
+            st.session_state["loaded_deal_id"] = deal_id
+
         # Also save any chat messages from this session
         chat_history = st.session_state.get("chat_history", [])
         if chat_history:
             save_chat_bulk(deal_id, chat_history)
+
+        # Flush any call analyses that were uploaded BEFORE this save.
+        pending_calls = st.session_state.get("pending_call_analyses", []) or []
+        flushed_calls = 0
+        flush_errors: list = []
+        if pending_calls:
+            from modules.db import save_call_analysis as _save_ca
+            for p in pending_calls:
+                try:
+                    new_id = _save_ca(deal_id=deal_id, **p)
+                    if new_id:
+                        flushed_calls += 1
+                except Exception as e:
+                    flush_errors.append(str(e))
+            st.session_state["pending_call_analyses"] = []
+
+        verb = "updated" if was_update else "saved"
         st.success(
-            f"Deal #{deal_id} saved." +
-            (f" Chat history ({len(chat_history)} messages) preserved." if chat_history else "")
+            f"Deal #{deal_id} {verb}."
+            + (f" Chat history ({len(chat_history)} messages) preserved." if chat_history else "")
+            + (f" {flushed_calls} call recording{'s' if flushed_calls != 1 else ''} attached." if flushed_calls else "")
         )
+        if flush_errors:
+            st.warning(
+                f"⚠️ {len(flush_errors)} call recording(s) could not be saved: "
+                + "; ".join(flush_errors)
+            )
 
 # Word memo (with rehab line items)
 try:
@@ -843,6 +1037,18 @@ with st.expander(_expander_title, expanded=False):
                 "Drag in an audio recording of your call with the homeowner "
                 "(mp3, m4a, wav, mp4, or mov). It'll be transcribed and "
                 "saved for your manager to review and provide coaching on."
+            )
+
+        # --- Pending (unsaved) analyses banner ---------------------------
+        # If the user uploaded calls BEFORE saving the deal, show a
+        # clear indicator so they know what's queued and will save next.
+        _pending = st.session_state.get("pending_call_analyses", []) or []
+        if _pending:
+            st.info(
+                f"📌 **{len(_pending)} call recording"
+                f"{'s' if len(_pending) != 1 else ''} queued.** "
+                "Will save to this deal automatically when you click "
+                "💾 Save deal above."
             )
 
         # --- Render history of past analyses for this deal ----------------
@@ -979,33 +1185,50 @@ with st.expander(_expander_title, expanded=False):
                             "may re-run the analysis on their end."
                         )
 
-                # Step 4: persist — only if the deal has been saved.
-                # Persistence happens for EVERY successful upload regardless
-                # of role, so Manager can review the agent's call later.
+                # Step 4: persist. Two paths:
+                #   (a) Deal already saved → write directly to DB now.
+                #   (b) Deal not yet saved → stash in session_state pending
+                #       queue; the next Save Deal click will flush it.
+                #
+                # This way the user can upload+analyze before OR after saving
+                # the deal — order doesn't matter, the analysis is never lost.
                 save_succeeded = False
-                if existing_deal_id and "error" not in analysis:
-                    try:
-                        new_id = save_call_analysis(
-                            deal_id=existing_deal_id,
-                            call_type=call_type,
-                            audio_filename=audio_file.name,
-                            audio_duration_seconds=tr.get("duration_seconds", 0),
-                            transcript=tr,
-                            analysis=analysis,
-                            user_email=user.get("email") if isinstance(user, dict) else None,
-                        )
-                        save_succeeded = bool(new_id)
-                    except Exception as e:
-                        if _can_review:
-                            st.warning(
-                                f"Analysis ran successfully but not saved to "
-                                f"the database: {e}"
-                            )
-                        else:
-                            st.error(
-                                "Upload could not be saved — please try again "
-                                "or contact your manager."
-                            )
+                queued_for_save = False
+                if "error" not in analysis:
+                    payload = {
+                        "call_type": call_type,
+                        "audio_filename": audio_file.name,
+                        "audio_duration_seconds": tr.get("duration_seconds", 0),
+                        "transcript": tr,
+                        "analysis": analysis,
+                        "user_email": user.get("email") if isinstance(user, dict) else None,
+                    }
+                    if existing_deal_id:
+                        try:
+                            new_id = save_call_analysis(deal_id=existing_deal_id, **payload)
+                            save_succeeded = bool(new_id)
+                            if not save_succeeded and _can_review:
+                                st.warning(
+                                    "Analysis ran but the database write "
+                                    "returned no row. Check Supabase logs."
+                                )
+                        except Exception as e:
+                            if _can_review:
+                                st.warning(
+                                    f"Analysis ran successfully but not saved "
+                                    f"to the database: {e}"
+                                )
+                            else:
+                                st.error(
+                                    "Upload could not be saved — please try "
+                                    "again or contact your manager."
+                                )
+                    else:
+                        # Stash for later — will be flushed by Save Deal
+                        pending = st.session_state.get("pending_call_analyses", [])
+                        pending.append(payload)
+                        st.session_state["pending_call_analyses"] = pending
+                        queued_for_save = True
 
                 if "error" not in analysis:
                     if _can_review:
@@ -1021,13 +1244,14 @@ with st.expander(_expander_title, expanded=False):
                         st.markdown(analysis_mod.format_full_analysis(analysis))
                         with st.expander("📜 Transcript (speaker-labeled)"):
                             st.markdown(tr.get("labeled_text", ""))
-                        if not existing_deal_id:
+                        if queued_for_save:
                             st.info(
-                                "💡 Save this deal first if you want this "
-                                "analysis preserved with the deal record. "
-                                "The analysis above will disappear when you "
-                                "leave the page."
+                                "📌 This analysis is queued and will save "
+                                "automatically the moment you click 💾 Save "
+                                "deal above."
                             )
+                        elif save_succeeded:
+                            st.toast("💾 Saved to deal history", icon="✅")
                     else:
                         # Step 3b: Agent — clean confirmation only, no analysis,
                         # no transcript, no grade. Coaching is the manager's job.
@@ -1037,11 +1261,16 @@ with st.expander(_expander_title, expanded=False):
                                 "will review it and may follow up with you "
                                 "about tactics for the next call."
                             )
-                        elif not existing_deal_id:
+                        elif queued_for_save:
+                            st.success(
+                                "✅ **Call uploaded.** Click 💾 Save deal "
+                                "above to attach this recording to the deal "
+                                "and send it to your manager for review."
+                            )
+                        else:
                             st.warning(
-                                "✅ Call uploaded but not saved — please save "
-                                "the deal first (the 💾 button above) and "
-                                "re-upload so this stays attached to the deal."
+                                "Call upload had an issue. Try saving the "
+                                "deal first, then re-upload."
                             )
 
 
