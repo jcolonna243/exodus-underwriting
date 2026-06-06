@@ -749,6 +749,10 @@ if c1.button("Save deal to history", type="primary", use_container_width=True):
         st.error("Enter an address before saving.")
     else:
         deal_id = save_deal(inputs_dict, rec, user_email=user.get("email"))
+        # Stash the new deal_id so the call-analysis section can attach
+        # uploaded calls to this deal (and load any prior calls saved
+        # against it).
+        st.session_state["loaded_deal_id"] = deal_id
         # Also save any chat messages from this session
         chat_history = st.session_state.get("chat_history", [])
         if chat_history:
@@ -787,6 +791,200 @@ if c4.button("Reset form", use_container_width=True):
     # render) so Streamlit's internal widget cache also resets.
     st.session_state["_pending_reset"] = True
     st.rerun()
+
+# ============================================================================
+# 🎤 SALES CALL ANALYSIS
+# ============================================================================
+# Upload a recording of the call you had with the seller; Deepgram transcribes
+# it with speaker diarization; Claude grades it against the methodology doc.
+st.markdown("---")
+with st.expander("🎤 Sales Call Analysis — upload a recording and grade the call",
+                 expanded=False):
+    from modules import transcribe as transcribe_mod
+    from modules import call_analysis as analysis_mod
+    from modules.db import (save_call_analysis, load_call_analyses_for_deal,
+                            delete_call_analysis)
+
+    # Configuration guards — show actionable warnings if anything's missing
+    _missing = []
+    if not transcribe_mod.is_configured():
+        _missing.append(
+            '**Deepgram** — add a `[deepgram] api_key = "..."` block to '
+            "Streamlit Cloud → Settings → Secrets. Sign up at deepgram.com "
+            "(free $200 trial credit, no card required)."
+        )
+    if not analysis_mod.is_configured():
+        _missing.append(
+            '**Anthropic** — already required for the chat feature. Same '
+            'key under `[anthropic]`.'
+        )
+
+    if _missing:
+        st.warning(
+            "Call analysis needs the following before it can run:\n\n"
+            + "\n\n".join(f"- {m}" for m in _missing)
+        )
+    else:
+        st.caption(
+            "Drag in an audio recording of the call (mp3, m4a, wav, mp4, or "
+            "mov). Deepgram transcribes it with speaker diarization, then "
+            "Claude grades it against your sales methodology. ~$0.30–0.60 "
+            "per call, 30-60 seconds end-to-end."
+        )
+
+        # --- Render history of past analyses for this deal ----------------
+        # (Only meaningful once the deal has been saved at least once.)
+        existing_deal_id = st.session_state.get("loaded_deal_id")
+        existing_analyses = []
+        if existing_deal_id:
+            try:
+                existing_analyses = load_call_analyses_for_deal(existing_deal_id)
+            except Exception:
+                existing_analyses = []
+
+        if existing_analyses:
+            st.markdown("**Previous calls on this deal:**")
+            for row in existing_analyses:
+                hdr = (f"• {row.get('call_type', 'Call')} "
+                       f"— {row.get('audio_filename', '(no name)')}")
+                with st.expander(hdr, expanded=False):
+                    a = row.get("analysis") or {}
+                    st.markdown(analysis_mod.format_full_analysis(a))
+                    t = row.get("transcript") or {}
+                    if t.get("labeled_text"):
+                        with st.expander("Show transcript"):
+                            st.markdown(t["labeled_text"])
+                    if st.button("🗑 Delete this analysis",
+                                 key=f"del_ca_{row['id']}"):
+                        if delete_call_analysis(row["id"]):
+                            st.rerun()
+            st.markdown("---")
+
+        # --- Upload form ---------------------------------------------------
+        c_upl, c_type = st.columns([3, 2])
+        audio_file = c_upl.file_uploader(
+            "Audio recording",
+            type=["mp3", "m4a", "wav", "mp4", "mov", "aac"],
+            key="call_audio_uploader",
+            help="Upload the recording of your call. Files up to ~100MB work "
+                 "well. Longer files take longer to transcribe.",
+        )
+        call_type = c_type.selectbox(
+            "Call type",
+            ["Process Call", "Offer Call", "Renegotiation",
+             "Follow-up", "Other"],
+            key="call_type_select",
+            help="Which call in the sequence? Affects how the methodology "
+                 "evaluates the rep's structure.",
+        )
+
+        # Speaker mapping — let the user say who's speaker 0 vs speaker 1
+        # AFTER transcription (Deepgram doesn't know which is rep vs seller).
+        # For the analysis step we'll use whatever mapping is current.
+        c_s0, c_s1 = st.columns(2)
+        speaker_0_label = c_s0.selectbox(
+            "Speaker A is…", ["Rep", "Seller", "Other"],
+            key="speaker_0_label", index=0,
+            help="Diarization separates voices but doesn't know who's who. "
+                 "Pick after listening to the first few seconds; can be "
+                 "changed before re-running analysis.",
+        )
+        speaker_1_label = c_s1.selectbox(
+            "Speaker B is…", ["Rep", "Seller", "Other"],
+            key="speaker_1_label", index=1,
+        )
+        speaker_labels = {0: speaker_0_label, 1: speaker_1_label}
+
+        do_analyze = st.button(
+            "🎯 Transcribe & Analyze",
+            type="primary",
+            use_container_width=True,
+            disabled=(audio_file is None),
+        )
+
+        if do_analyze and audio_file is not None:
+            # Step 1: transcribe
+            with st.spinner("Transcribing audio via Deepgram… (30-60 sec for a 10-min call)"):
+                file_bytes = audio_file.getvalue()
+                # Pick a reasonable mime type from the upload's name
+                ext = (audio_file.name.rsplit(".", 1)[-1] or "").lower()
+                mime = {
+                    "mp3": "audio/mpeg",
+                    "m4a": "audio/mp4",
+                    "m4b": "audio/mp4",
+                    "wav": "audio/wav",
+                    "mp4": "audio/mp4",
+                    "mov": "video/quicktime",
+                    "aac": "audio/aac",
+                }.get(ext, "audio/mpeg")
+
+                tr = transcribe_mod.transcribe_audio(file_bytes, mime_type=mime)
+
+            if not tr.get("found"):
+                st.error(f"Transcription failed: {tr.get('error', 'unknown')}")
+            else:
+                # Apply user's speaker labels
+                tr = transcribe_mod.relabel_speakers(tr, speaker_labels)
+
+                # Step 2: analyze
+                with st.spinner("Claude is grading the call against the methodology…"):
+                    deal_context = {
+                        "property": property_dict,
+                        "recommendation": rec,
+                        "seller": seller_dict,
+                    }
+                    analysis = analysis_mod.analyze_call(
+                        tr.get("labeled_text", ""),
+                        deal_context,
+                        call_type=call_type,
+                    )
+
+                if "error" in analysis:
+                    st.error(f"Analysis failed: {analysis['error']}")
+                    if analysis.get("raw_response"):
+                        with st.expander("Raw response (debug)"):
+                            st.code(analysis["raw_response"])
+                else:
+                    # Step 3: render
+                    st.success(
+                        f"✅ Analysis complete — {tr.get('duration_seconds', 0):.0f} "
+                        f"sec audio, "
+                        f"{analysis.get('_meta', {}).get('input_tokens', '—')} "
+                        f"input + "
+                        f"{analysis.get('_meta', {}).get('output_tokens', '—')} "
+                        f"output tokens."
+                    )
+                    st.markdown(analysis_mod.format_full_analysis(analysis))
+
+                    with st.expander("📜 Transcript (speaker-labeled)"):
+                        st.markdown(tr.get("labeled_text", ""))
+
+                    # Step 4: persist — only if the deal has been saved
+                    if existing_deal_id:
+                        try:
+                            new_id = save_call_analysis(
+                                deal_id=existing_deal_id,
+                                call_type=call_type,
+                                audio_filename=audio_file.name,
+                                audio_duration_seconds=tr.get("duration_seconds", 0),
+                                transcript=tr,
+                                analysis=analysis,
+                                user_email=user.get("email") if isinstance(user, dict) else None,
+                            )
+                            if new_id:
+                                st.toast("💾 Saved to deal history", icon="✅")
+                        except Exception as e:
+                            st.warning(
+                                f"Analysis displayed above but not saved to "
+                                f"the database: {e}"
+                            )
+                    else:
+                        st.info(
+                            "💡 Save this deal first if you want this analysis "
+                            "preserved with the deal record. The analysis "
+                            "above will disappear when you leave the page."
+                        )
+
 
 # ============================================================================
 # 💬 BRAINSTORM WITH CLAUDE

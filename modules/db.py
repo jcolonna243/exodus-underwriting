@@ -160,3 +160,72 @@ def distinct_strategies() -> List[str]:
     strategies = sorted({r["strategy"] for r in (res.data or [])
                          if r.get("strategy")})
     return strategies
+
+
+# ---- Call analyses (seller-call recordings + AI grading) ----------------
+# Schema (run in Supabase SQL editor before first use):
+#   CREATE TABLE call_analyses (
+#       id BIGSERIAL PRIMARY KEY,
+#       deal_id BIGINT REFERENCES deals(id) ON DELETE CASCADE,
+#       created_at TIMESTAMPTZ DEFAULT NOW(),
+#       created_by TEXT,
+#       call_type TEXT,
+#       audio_filename TEXT,
+#       audio_duration_seconds NUMERIC,
+#       transcript JSONB,
+#       analysis JSONB
+#   );
+#   CREATE INDEX call_analyses_deal_id_idx ON call_analyses(deal_id);
+#   ALTER TABLE call_analyses ENABLE ROW LEVEL SECURITY;
+#   -- No policies needed; the app uses service_role which bypasses RLS.
+
+def save_call_analysis(deal_id: Optional[int], call_type: str,
+                       audio_filename: str, audio_duration_seconds: float,
+                       transcript: Dict[str, Any], analysis: Dict[str, Any],
+                       user_email: Optional[str] = None) -> int:
+    """Persist a completed call transcription + Claude analysis.
+
+    Args:
+        deal_id: ID of the deal this call belongs to, or None for an
+            untied call (training/practice analysis with no deal record).
+        call_type: "Process Call" / "Offer Call" / "Renegotiation" / etc.
+        audio_filename: original uploaded filename for reference
+        audio_duration_seconds: from Deepgram metadata
+        transcript: full transcribe_audio() result dict
+        analysis: full analyze_call() result dict
+        user_email: who ran the analysis
+
+    Returns:
+        The new row's ID, or 0 if the insert returned no data.
+    """
+    c = get_client()
+    row = {
+        "deal_id": deal_id,
+        "created_by": user_email or "unknown",
+        "call_type": call_type,
+        "audio_filename": audio_filename,
+        "audio_duration_seconds": float(audio_duration_seconds or 0),
+        "transcript": transcript,
+        "analysis": analysis,
+    }
+    res = c.table("call_analyses").insert(row).execute()
+    return res.data[0]["id"] if res.data else 0
+
+
+def load_call_analyses_for_deal(deal_id: int) -> List[Dict[str, Any]]:
+    """Return all call analyses for a given deal, oldest-first."""
+    c = get_client()
+    res = (c.table("call_analyses")
+            .select("*")
+            .eq("deal_id", deal_id)
+            .execute())
+    rows = res.data or []
+    rows.sort(key=lambda r: r.get("id") or 0)
+    return rows
+
+
+def delete_call_analysis(analysis_id: int) -> bool:
+    """Delete a single call analysis row."""
+    c = get_client()
+    res = c.table("call_analyses").delete().eq("id", analysis_id).execute()
+    return bool(res.data)
