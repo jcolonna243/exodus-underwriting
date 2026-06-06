@@ -14,6 +14,7 @@ import streamlit as st
 
 from modules.auth import require_login, sidebar_account_widget
 from modules import call_analysis as analysis_mod
+from modules.checklist_pdf import build_checklist_pdf
 from modules.db import (list_all_call_analyses, get_call_analysis,
                         save_coaching_note, delete_call_analysis)
 from modules.settings import can_review_calls
@@ -71,6 +72,43 @@ if "review_analysis_id" in st.session_state:
     # The analysis itself
     analysis = row.get("analysis") or {}
     st.markdown(analysis_mod.format_full_analysis(analysis))
+
+    # --- Process Call Checklist PDF download ---------------------------
+    # Generates a printable checklist that mirrors the Results Driven sheet
+    # — useful as a tangible artifact for 1-on-1 coaching with the agent.
+    try:
+        # Carry the saved coaching note into the PDF if there is one
+        analysis_for_pdf = dict(analysis)
+        if row.get("coaching_note"):
+            analysis_for_pdf["_coaching_note"] = row["coaching_note"]
+        pdf_deal_ctx = {
+            "address": deal.get("address", "(no address)"),
+            "city": deal.get("city", ""),
+            "state": deal.get("state", ""),
+            "strategy": deal.get("strategy", ""),
+        }
+        pdf_call_meta = {
+            "call_type": row.get("call_type", "—"),
+            "uploaded_by": row.get("created_by", "—"),
+            "uploaded_at": row.get("created_at", ""),
+            "duration_seconds": row.get("audio_duration_seconds", 0) or 0,
+        }
+        pdf_bytes = build_checklist_pdf(analysis_for_pdf, pdf_deal_ctx, pdf_call_meta)
+        # Filename: Process_Checklist_Address_Date.pdf
+        safe_addr = "".join(c if c.isalnum() or c in "-_" else "_"
+                            for c in deal.get("address", "deal"))[:60]
+        safe_date = (row.get("created_at") or "")[:10]
+        st.download_button(
+            "📄 Download Process Call Checklist (PDF)",
+            data=pdf_bytes,
+            file_name=f"Process_Checklist_{safe_addr}_{safe_date}.pdf",
+            mime="application/pdf",
+            use_container_width=True,
+            help="Printable version of the Process Call Checklist for use "
+                 "during 1-on-1 coaching with the agent.",
+        )
+    except Exception as e:
+        st.warning(f"Could not generate the checklist PDF: {e}")
 
     # Coaching note section
     st.markdown("---")
