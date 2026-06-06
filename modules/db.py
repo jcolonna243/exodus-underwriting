@@ -163,7 +163,9 @@ def distinct_strategies() -> List[str]:
 
 
 # ---- Call analyses (seller-call recordings + AI grading) ----------------
-# Schema (run in Supabase SQL editor before first use):
+# Schema (v10 baseline, then add v11 columns for coaching notes):
+#
+#   -- v10 (already run):
 #   CREATE TABLE call_analyses (
 #       id BIGSERIAL PRIMARY KEY,
 #       deal_id BIGINT REFERENCES deals(id) ON DELETE CASCADE,
@@ -177,6 +179,13 @@ def distinct_strategies() -> List[str]:
 #   );
 #   CREATE INDEX call_analyses_deal_id_idx ON call_analyses(deal_id);
 #   ALTER TABLE call_analyses ENABLE ROW LEVEL SECURITY;
+#
+#   -- v11 (run once to add coaching-note support):
+#   ALTER TABLE call_analyses
+#     ADD COLUMN IF NOT EXISTS coaching_note TEXT,
+#     ADD COLUMN IF NOT EXISTS coaching_note_by TEXT,
+#     ADD COLUMN IF NOT EXISTS coaching_note_at TIMESTAMPTZ;
+#
 #   -- No policies needed; the app uses service_role which bypasses RLS.
 
 def save_call_analysis(deal_id: Optional[int], call_type: str,
@@ -229,3 +238,95 @@ def delete_call_analysis(analysis_id: int) -> bool:
     c = get_client()
     res = c.table("call_analyses").delete().eq("id", analysis_id).execute()
     return bool(res.data)
+
+
+def list_all_call_analyses(limit: int = 500) -> List[Dict[str, Any]]:
+    """List every call analysis across all deals — for the Call Reviews page.
+
+    Joins in the deal address so the manager can scan by property without
+    needing to look up each deal_id. Returns newest first.
+    """
+    import json
+    import urllib.parse
+    import urllib.request
+    import urllib.error
+    import streamlit as st
+
+    base_url = st.secrets["supabase"]["url"].rstrip("/")
+    key = st.secrets["supabase"]["service_role_key"]
+
+    # Use PostgREST embedding: pull deal.address along with each row
+    params = {
+        "select": "*,deals(address,city,state,strategy)",
+        "limit": str(limit),
+    }
+    full_url = f"{base_url}/rest/v1/call_analyses?{urllib.parse.urlencode(params)}"
+    req = urllib.request.Request(full_url, headers={
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Accept": "application/json",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        raise RuntimeError(
+            f"Supabase REST returned HTTP {e.code}.\n"
+            f"URL: {full_url}\nBody: {body[:800]}"
+        )
+
+    if not isinstance(data, list):
+        return []
+    data.sort(key=lambda r: r.get("id") or 0, reverse=True)
+    return data
+
+
+def get_call_analysis(analysis_id: int) -> Optional[Dict[str, Any]]:
+    """Fetch a single call analysis by ID, including its deal context."""
+    import json
+    import urllib.parse
+    import urllib.request
+    import urllib.error
+    import streamlit as st
+
+    base_url = st.secrets["supabase"]["url"].rstrip("/")
+    key = st.secrets["supabase"]["service_role_key"]
+    params = {
+        "select": "*,deals(address,city,state,strategy,inputs,outputs)",
+        "id": f"eq.{int(analysis_id)}",
+        "limit": "1",
+    }
+    full_url = f"{base_url}/rest/v1/call_analyses?{urllib.parse.urlencode(params)}"
+    req = urllib.request.Request(full_url, headers={
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Accept": "application/json",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return None
+    if isinstance(data, list) and data:
+        return data[0]
+    return None
+
+
+def save_coaching_note(analysis_id: int, note: str, author_email: str) -> bool:
+    """Persist a coaching note written by a Manager against a call analysis."""
+    c = get_client()
+    res = c.table("call_analyses").update({
+        "coaching_note": note,
+        "coaching_note_by": author_email,
+        # coaching_note_at is set client-side because supabase-py upserts
+        # don't auto-stamp on update; PostgREST sends the literal value.
+        "coaching_note_at": _now_iso(),
+    }).eq("id", analysis_id).execute()
+    return bool(res.data)
+
+
+def _now_iso() -> str:
+    """Current UTC timestamp in ISO 8601, suitable for TIMESTAMPTZ writes."""
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()

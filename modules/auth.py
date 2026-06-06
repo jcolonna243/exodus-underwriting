@@ -33,10 +33,11 @@ def require_login():
         has_auth = False
 
     if not has_auth:
-        # Show a banner that the app is in dev mode and let them through
+        # Show a banner that the app is in dev mode and let them through.
+        # Dev mode gets admin role so all pages are reachable.
         st.warning("⚙️ Auth not configured — running in open mode. "
                    "Configure secrets.toml to enable Google sign-in.")
-        return {"email": "dev@local", "name": "Dev User"}
+        return {"email": "dev@local", "name": "Dev User", "role": "admin"}
 
     # If user is not logged in, show login button
     if not getattr(st, "user", None) or not st.user.is_logged_in:
@@ -76,17 +77,31 @@ def require_login():
             st.logout()
         st.stop()
 
-    # Auth OK — return user info
-    return {"email": email, "name": st.user.name or email}
+    # Auth OK — look up role and return user info
+    try:
+        from modules.settings import get_role
+        role = get_role(email)
+    except Exception:
+        role = "agent"
+    return {"email": email, "name": st.user.name or email, "role": role}
 
 
 def sidebar_account_widget():
     """Render account info + sign-out in the sidebar."""
     try:
         if getattr(st, "user", None) and st.user.is_logged_in:
+            email = (st.user.email or "").lower().strip()
+            try:
+                from modules.settings import get_role
+                role = get_role(email)
+            except Exception:
+                role = "agent"
+            role_badge = {"admin": "🛠 Admin", "manager": "👔 Manager",
+                          "agent": "👤 Agent"}.get(role, "👤 Agent")
             with st.sidebar:
                 st.markdown("---")
-                st.write(f"👤 **{st.user.name or st.user.email}**")
+                st.write(f"**{st.user.name or st.user.email}**")
+                st.caption(role_badge)
                 if st.button("Sign out", key="signout_btn"):
                     st.logout()
     except Exception:

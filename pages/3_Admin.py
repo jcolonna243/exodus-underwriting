@@ -21,11 +21,17 @@ user = require_login()
 sidebar_account_widget()
 
 # --- Access control -----------------------------------------------------
-if not st_settings.is_admin(user["email"]):
+# Admin: full edit access. Manager: can VIEW everything except the Roles tab
+# but cannot save changes (every form's submit button is hidden / disabled).
+# Agents: hard-blocked.
+if not st_settings.can_view_admin(user["email"]):
     st.title("⛔ Admin access required")
-    st.error(f"`{user['email']}` is not on the admin list. Contact Jo if you "
-             f"should have access.")
+    st.error(f"`{user['email']}` is not on the admin or manager list. "
+             "Contact Jo if you should have access.")
     st.stop()
+
+IS_ADMIN = st_settings.can_edit_admin(user["email"])
+IS_MANAGER_RO = (not IS_ADMIN) and st_settings.can_view_admin(user["email"])
 
 if not supabase_configured():
     st.title("⚙️ Admin — not configured")
@@ -34,23 +40,42 @@ if not supabase_configured():
     st.stop()
 
 st.title("⚙️ Admin Settings")
-st.caption(f"Signed in as **{user['email']}** (admin). Changes here apply to "
-           f"all users on the next page load.")
+if IS_ADMIN:
+    st.caption(f"Signed in as **{user['email']}** (admin). Changes here apply "
+               "to all users on the next page load.")
+else:
+    st.info(
+        f"👔 Signed in as **{user['email']}** (manager). "
+        "You can view all admin settings here, but cannot make changes. "
+        "Contact Jo to update any value."
+    )
 
 
-# Helper to render a "Save row" inside a form
+# Helper to render a "Save row" inside a form. Returns False without rendering
+# if the current user is read-only (Manager) — keeps Manager from ever firing
+# a save accidentally.
 def _save_button(label: str) -> bool:
+    if IS_MANAGER_RO:
+        st.caption("🔒 Read-only — Manager role cannot save changes.")
+        return False
     return st.form_submit_button(label, type="primary", use_container_width=True)
 
 
-tab_repair, tab_strat, tab_fin, tab_comps, tab_emails, tab_export = st.tabs([
+# Tabs — Roles tab is Admin-only (hidden from Manager).
+_tab_labels = [
     "🔨 Repair Rates",
     "📐 Strategy Thresholds",
     "💵 Financing & Closing",
     "📊 Comp Settings",
     "👥 Allow-List",
     "📦 Export / Import",
-])
+]
+if IS_ADMIN:
+    _tab_labels.append("🛂 Roles")
+
+_tabs = st.tabs(_tab_labels)
+tab_repair, tab_strat, tab_fin, tab_comps, tab_emails, tab_export = _tabs[:6]
+tab_roles = _tabs[6] if IS_ADMIN else None
 
 
 # ============================================================================
@@ -690,3 +715,86 @@ with tab_export:
                     st.error("Some settings failed to import. Check format.")
         except Exception as e:
             st.error(f"Invalid JSON: {e}")
+
+
+# ============================================================================
+# TAB 7 — ROLES (Admin-only; hidden from Manager)
+# ============================================================================
+if tab_roles is not None:
+    with tab_roles:
+        st.markdown("### User Roles")
+        st.caption(
+            "Three roles control what each user sees in the app:\n\n"
+            "- **Admin** — full edit access everywhere. Can assign roles.\n"
+            "- **Manager** — can view this page (read-only) and access the "
+            "📞 Call Reviews page. Can underwrite deals.\n"
+            "- **Agent** — can underwrite deals and upload call recordings, "
+            "but does NOT see call analysis output (coaching is the "
+            "manager's job).\n\n"
+            "Any allowed-list user who isn't assigned here defaults to **Agent**."
+        )
+
+        current_roles = st_settings.list_user_roles()
+
+        allowed_now = (st_settings.get_setting("allowed_emails")
+                       or ["jo@exoduspropertysolutions.com"])
+        allowed_lower = sorted({e.lower().strip() for e in allowed_now})
+
+        # Show a table-style view so it's easy to scan
+        st.markdown("**Current assignments**")
+        if not allowed_lower:
+            st.info("No users on the allow-list yet. Add emails on the "
+                    "Allow-List tab first.")
+        else:
+            with st.form("roles_form"):
+                new_roles_dict = {}
+                # Render one row per allowed email
+                for em in allowed_lower:
+                    c_em, c_role = st.columns([3, 2])
+                    c_em.write(em)
+                    current_role = current_roles.get(em, "agent")
+                    idx = ["admin", "manager", "agent"].index(current_role) \
+                        if current_role in ("admin", "manager", "agent") else 2
+                    picked = c_role.selectbox(
+                        f"Role for {em}",
+                        ["admin", "manager", "agent"],
+                        index=idx,
+                        key=f"role_{em}",
+                        label_visibility="collapsed",
+                    )
+                    new_roles_dict[em] = picked
+
+                st.markdown("---")
+                # Sanity: the current admin user can't demote themselves below
+                # admin in the same save (that'd lock them out).
+                current_email = user["email"].lower().strip()
+                save_clicked = _save_button("💾 Save role assignments")
+                if save_clicked:
+                    if new_roles_dict.get(current_email) != "admin":
+                        st.warning(
+                            "⚠️ You can't demote yourself from Admin in this "
+                            "tab — that would lock you out. Keep your own "
+                            "row set to admin (or have another admin do it)."
+                        )
+                    else:
+                        ok = st_settings.set_setting(
+                            "user_roles", new_roles_dict,
+                            updated_by=user["email"],
+                        )
+                        if ok:
+                            st.success(
+                                f"✅ Saved. "
+                                f"{sum(1 for v in new_roles_dict.values() if v == 'admin')} admin, "
+                                f"{sum(1 for v in new_roles_dict.values() if v == 'manager')} manager, "
+                                f"{sum(1 for v in new_roles_dict.values() if v == 'agent')} agent."
+                            )
+                            st.rerun()
+                        else:
+                            st.error("Failed to save role assignments.")
+
+        st.markdown("---")
+        st.caption(
+            "💡 Adding a new user: first add their email to the **👥 Allow-List** "
+            "tab. Once they appear above, you can assign their role here. "
+            "They sign in with their Google account at the app URL."
+        )

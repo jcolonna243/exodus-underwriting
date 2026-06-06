@@ -798,8 +798,14 @@ if c4.button("Reset form", use_container_width=True):
 # Upload a recording of the call you had with the seller; Deepgram transcribes
 # it with speaker diarization; Claude grades it against the methodology doc.
 st.markdown("---")
-with st.expander("🎤 Sales Call Analysis — upload a recording and grade the call",
-                 expanded=False):
+_role = (user.get("role") if isinstance(user, dict) else "agent") or "agent"
+_can_review = _role in ("admin", "manager")
+_expander_title = (
+    "🎤 Sales Call Analysis — upload a recording and grade the call"
+    if _can_review
+    else "🎤 Sales Call Upload — upload a recording for your manager to review"
+)
+with st.expander(_expander_title, expanded=False):
     from modules import transcribe as transcribe_mod
     from modules import call_analysis as analysis_mod
     from modules.db import (save_call_analysis, load_call_analyses_for_deal,
@@ -825,24 +831,32 @@ with st.expander("🎤 Sales Call Analysis — upload a recording and grade the 
             + "\n\n".join(f"- {m}" for m in _missing)
         )
     else:
-        st.caption(
-            "Drag in an audio recording of the call (mp3, m4a, wav, mp4, or "
-            "mov). Deepgram transcribes it with speaker diarization, then "
-            "Claude grades it against your sales methodology. ~$0.30–0.60 "
-            "per call, 30-60 seconds end-to-end."
-        )
+        if _can_review:
+            st.caption(
+                "Drag in an audio recording of the call (mp3, m4a, wav, mp4, "
+                "or mov). Deepgram transcribes it with speaker diarization, "
+                "then Claude grades it against your sales methodology. "
+                "~$0.30–0.60 per call, 30-60 seconds end-to-end."
+            )
+        else:
+            st.caption(
+                "Drag in an audio recording of your call with the homeowner "
+                "(mp3, m4a, wav, mp4, or mov). It'll be transcribed and "
+                "saved for your manager to review and provide coaching on."
+            )
 
         # --- Render history of past analyses for this deal ----------------
-        # (Only meaningful once the deal has been saved at least once.)
+        # ADMIN / MANAGER ONLY. Agents never see prior analyses, even on
+        # the same deal — that's by design (coaching is the manager's job).
         existing_deal_id = st.session_state.get("loaded_deal_id")
         existing_analyses = []
-        if existing_deal_id:
+        if existing_deal_id and _can_review:
             try:
                 existing_analyses = load_call_analyses_for_deal(existing_deal_id)
             except Exception:
                 existing_analyses = []
 
-        if existing_analyses:
+        if existing_analyses and _can_review:
             st.markdown("**Previous calls on this deal:**")
             for row in existing_analyses:
                 hdr = (f"• {row.get('call_type', 'Call')} "
@@ -859,6 +873,17 @@ with st.expander("🎤 Sales Call Analysis — upload a recording and grade the 
                         if delete_call_analysis(row["id"]):
                             st.rerun()
             st.markdown("---")
+        elif existing_deal_id and not _can_review:
+            # Agent view — just a count, no detail
+            try:
+                count = len(load_call_analyses_for_deal(existing_deal_id))
+            except Exception:
+                count = 0
+            if count:
+                st.caption(
+                    f"📬 {count} call{'s' if count != 1 else ''} already "
+                    "uploaded for this deal and queued for review."
+                )
 
         # --- Upload form ---------------------------------------------------
         c_upl, c_type = st.columns([3, 2])
@@ -940,50 +965,84 @@ with st.expander("🎤 Sales Call Analysis — upload a recording and grade the 
                     )
 
                 if "error" in analysis:
-                    st.error(f"Analysis failed: {analysis['error']}")
-                    if analysis.get("raw_response"):
-                        with st.expander("Raw response (debug)"):
-                            st.code(analysis["raw_response"])
-                else:
-                    # Step 3: render
-                    st.success(
-                        f"✅ Analysis complete — {tr.get('duration_seconds', 0):.0f} "
-                        f"sec audio, "
-                        f"{analysis.get('_meta', {}).get('input_tokens', '—')} "
-                        f"input + "
-                        f"{analysis.get('_meta', {}).get('output_tokens', '—')} "
-                        f"output tokens."
-                    )
-                    st.markdown(analysis_mod.format_full_analysis(analysis))
+                    # Show analysis failure to Admin/Manager only — Agents
+                    # don't see analysis output at all, even errors.
+                    if _can_review:
+                        st.error(f"Analysis failed: {analysis['error']}")
+                        if analysis.get("raw_response"):
+                            with st.expander("Raw response (debug)"):
+                                st.code(analysis["raw_response"])
+                    else:
+                        st.warning(
+                            "The recording was uploaded but the analysis step "
+                            "failed. Your manager has been notified — they "
+                            "may re-run the analysis on their end."
+                        )
 
-                    with st.expander("📜 Transcript (speaker-labeled)"):
-                        st.markdown(tr.get("labeled_text", ""))
-
-                    # Step 4: persist — only if the deal has been saved
-                    if existing_deal_id:
-                        try:
-                            new_id = save_call_analysis(
-                                deal_id=existing_deal_id,
-                                call_type=call_type,
-                                audio_filename=audio_file.name,
-                                audio_duration_seconds=tr.get("duration_seconds", 0),
-                                transcript=tr,
-                                analysis=analysis,
-                                user_email=user.get("email") if isinstance(user, dict) else None,
-                            )
-                            if new_id:
-                                st.toast("💾 Saved to deal history", icon="✅")
-                        except Exception as e:
+                # Step 4: persist — only if the deal has been saved.
+                # Persistence happens for EVERY successful upload regardless
+                # of role, so Manager can review the agent's call later.
+                save_succeeded = False
+                if existing_deal_id and "error" not in analysis:
+                    try:
+                        new_id = save_call_analysis(
+                            deal_id=existing_deal_id,
+                            call_type=call_type,
+                            audio_filename=audio_file.name,
+                            audio_duration_seconds=tr.get("duration_seconds", 0),
+                            transcript=tr,
+                            analysis=analysis,
+                            user_email=user.get("email") if isinstance(user, dict) else None,
+                        )
+                        save_succeeded = bool(new_id)
+                    except Exception as e:
+                        if _can_review:
                             st.warning(
-                                f"Analysis displayed above but not saved to "
+                                f"Analysis ran successfully but not saved to "
                                 f"the database: {e}"
                             )
-                    else:
-                        st.info(
-                            "💡 Save this deal first if you want this analysis "
-                            "preserved with the deal record. The analysis "
-                            "above will disappear when you leave the page."
+                        else:
+                            st.error(
+                                "Upload could not be saved — please try again "
+                                "or contact your manager."
+                            )
+
+                if "error" not in analysis:
+                    if _can_review:
+                        # Step 3a: Admin / Manager — render the full analysis
+                        st.success(
+                            f"✅ Analysis complete — "
+                            f"{tr.get('duration_seconds', 0):.0f} sec audio, "
+                            f"{analysis.get('_meta', {}).get('input_tokens', '—')} "
+                            f"input + "
+                            f"{analysis.get('_meta', {}).get('output_tokens', '—')} "
+                            f"output tokens."
                         )
+                        st.markdown(analysis_mod.format_full_analysis(analysis))
+                        with st.expander("📜 Transcript (speaker-labeled)"):
+                            st.markdown(tr.get("labeled_text", ""))
+                        if not existing_deal_id:
+                            st.info(
+                                "💡 Save this deal first if you want this "
+                                "analysis preserved with the deal record. "
+                                "The analysis above will disappear when you "
+                                "leave the page."
+                            )
+                    else:
+                        # Step 3b: Agent — clean confirmation only, no analysis,
+                        # no transcript, no grade. Coaching is the manager's job.
+                        if save_succeeded:
+                            st.success(
+                                "✅ **Call uploaded for review.** Your manager "
+                                "will review it and may follow up with you "
+                                "about tactics for the next call."
+                            )
+                        elif not existing_deal_id:
+                            st.warning(
+                                "✅ Call uploaded but not saved — please save "
+                                "the deal first (the 💾 button above) and "
+                                "re-upload so this stays attached to the deal."
+                            )
 
 
 # ============================================================================
