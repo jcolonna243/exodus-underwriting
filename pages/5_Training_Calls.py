@@ -179,11 +179,31 @@ with st.container(border=True):
 
     c_upl, c_type = st.columns([3, 2])
     audio_file = c_upl.file_uploader(
-        "Audio recording",
-        type=["mp3", "m4a", "wav", "mp4", "mov", "aac"],
+        "Audio or video recording (up to 1 GB)",
+        type=["mp3", "m4a", "wav", "aac", "mp4", "mov", "m4v", "webm"],
         key="training_audio_uploader",
-        help="The role-play recording — mp3, m4a, wav, mp4, or mov works.",
+        help="Audio (mp3/m4a/wav) or video (mp4/mov from Google Meet) — "
+             "videos are auto-converted to audio server-side. Faster uploads "
+             "if you convert to MP3 first (see tip below).",
     )
+    with c_upl.expander("💡 Speed up uploads: convert Google Meet MP4 to MP3 first"):
+        st.markdown(
+            "Google Meet recordings are mostly video data — the audio you "
+            "actually need is 5-10% of the file size. Converting locally "
+            "first means **smaller upload, faster transcription**, and the "
+            "tool produces the exact same grading.\n\n"
+            "**On Mac (no extra software needed):**\n"
+            "1. Open the .mp4 file in **QuickTime Player**.\n"
+            "2. Click **File → Export As → Audio Only…**\n"
+            "3. Save as .m4a (or rename to .mp3 if you prefer).\n"
+            "4. Upload the audio file here.\n\n"
+            "**Or use [VLC](https://www.videolan.org/vlc/) (free, any OS):**\n"
+            "1. Open VLC → **File → Convert/Stream**.\n"
+            "2. Drop in the .mp4, pick **Audio - MP3** as the profile.\n"
+            "3. Save and upload the resulting MP3.\n\n"
+            "If you skip this and upload the MP4 directly, that's fine too — "
+            "the server will strip the video for you (just a slower upload)."
+        )
     call_type = c_type.selectbox(
         "Call type",
         ["Process Call", "Offer Call", "Renegotiation",
@@ -235,16 +255,27 @@ with st.container(border=True):
     )
 
     if do_analyze and audio_file is not None:
-        # Step 1: transcribe
-        with st.spinner("Transcribing via Deepgram… (30-60 sec for a 10-min call)"):
-            file_bytes = audio_file.getvalue()
-            ext = (audio_file.name.rsplit(".", 1)[-1] or "").lower()
-            mime = {
-                "mp3": "audio/mpeg", "m4a": "audio/mp4", "m4b": "audio/mp4",
-                "wav": "audio/wav", "mp4": "audio/mp4",
-                "mov": "video/quicktime", "aac": "audio/aac",
-            }.get(ext, "audio/mpeg")
-            tr = transcribe_mod.transcribe_audio(file_bytes, mime_type=mime)
+        # Step 1: transcribe (auto-extracts audio if uploaded a video)
+        file_bytes = audio_file.getvalue()
+        ext = (audio_file.name.rsplit(".", 1)[-1] or "").lower()
+        mime = {
+            "mp3": "audio/mpeg", "m4a": "audio/mp4", "m4b": "audio/mp4",
+            "wav": "audio/wav", "aac": "audio/aac",
+            "mp4": "video/mp4", "mov": "video/quicktime",
+            "m4v": "video/mp4", "webm": "video/webm",
+        }.get(ext, "audio/mpeg")
+        is_video = transcribe_mod.is_video_file(audio_file.name)
+        spinner_msg = (
+            f"Extracting audio from {ext.upper()} then transcribing "
+            "via Deepgram… (1-2 minutes for a video)"
+            if is_video
+            else "Transcribing via Deepgram… (30-60 sec for a 10-min call)"
+        )
+        with st.spinner(spinner_msg):
+            tr = transcribe_mod.transcribe_audio(
+                file_bytes, mime_type=mime,
+                source_filename=audio_file.name,
+            )
 
         if not tr.get("found"):
             st.error(f"Transcription failed: {tr.get('error', 'unknown')}")

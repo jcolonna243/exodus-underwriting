@@ -13,10 +13,94 @@ Setup:    Add the API key to Streamlit Secrets as:
 """
 from __future__ import annotations
 import json
+import os
+import subprocess
+import tempfile
 import urllib.request
 import urllib.error
 from typing import Dict, Any, List, Optional
 import streamlit as st
+
+
+# Video file extensions we'll strip the video track from before sending to
+# Deepgram. The audio container we extract is MP3 at 16 kHz mono — small,
+# fast, Deepgram-friendly. Google Meet recordings come down as MP4.
+VIDEO_EXTENSIONS = {"mp4", "mov", "m4v", "webm", "avi", "mkv"}
+
+
+def is_video_file(filename: str) -> bool:
+    """Return True if the filename's extension matches a video container
+    we know how to strip with ffmpeg."""
+    ext = (filename.rsplit(".", 1)[-1] if "." in filename else "").lower()
+    return ext in VIDEO_EXTENSIONS
+
+
+def _ffmpeg_available() -> bool:
+    """Return True if ffmpeg is available on PATH (Streamlit Cloud installs
+    it from packages.txt at deploy time)."""
+    try:
+        subprocess.run(["ffmpeg", "-version"],
+                       capture_output=True, timeout=5, check=True)
+        return True
+    except (FileNotFoundError, subprocess.SubprocessError):
+        return False
+
+
+def extract_audio_from_video(video_bytes: bytes, source_ext: str = "mp4") -> bytes:
+    """Extract audio track from a video file using ffmpeg.
+
+    Returns mp3 bytes (mono, 16 kHz, ~64 kbps) — a 500 MB MP4 becomes a
+    ~25 MB MP3. Raises RuntimeError on failure (file corrupt, no audio
+    track, ffmpeg crashed, ffmpeg not installed).
+
+    Args:
+        video_bytes: raw bytes of the uploaded video file
+        source_ext:  file extension without dot (e.g. "mp4", "mov") — only
+            used to give the temp file a sensible suffix so ffmpeg can
+            detect the container format from the filename hint.
+    """
+    if not _ffmpeg_available():
+        raise RuntimeError(
+            "ffmpeg is not installed on this server. Add 'ffmpeg' to "
+            "packages.txt in the project root and redeploy."
+        )
+
+    suffix_in = "." + source_ext.lower().lstrip(".")
+    in_path: Optional[str] = None
+    out_path: Optional[str] = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=suffix_in, delete=False) as f_in:
+            f_in.write(video_bytes)
+            in_path = f_in.name
+        out_path = in_path.rsplit(".", 1)[0] + "_audio.mp3"
+
+        # -i input  -vn no-video  -ar 16000 sample rate (Deepgram-friendly)
+        # -ac 1 mono  -b:a 64k bitrate  -y overwrite output  -loglevel error
+        cmd = ["ffmpeg", "-i", in_path, "-vn",
+               "-ar", "16000", "-ac", "1", "-b:a", "64k",
+               "-y", "-loglevel", "error", out_path]
+        try:
+            result = subprocess.run(cmd, capture_output=True, timeout=600)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(
+                "ffmpeg timed out extracting audio (>10 minutes). The video "
+                "may be very long or corrupt. Try converting to MP3 locally "
+                "first."
+            )
+        if result.returncode != 0:
+            stderr = (result.stderr or b"").decode("utf-8", errors="replace")
+            raise RuntimeError(
+                f"ffmpeg failed to extract audio: {stderr[:400]}"
+            )
+        with open(out_path, "rb") as f_out:
+            return f_out.read()
+    finally:
+        for p in (in_path, out_path):
+            if p:
+                try:
+                    os.unlink(p)
+                except (FileNotFoundError, OSError):
+                    pass
 
 
 DEEPGRAM_URL = (
@@ -43,16 +127,24 @@ def _api_key() -> str:
     return st.secrets["deepgram"]["api_key"]
 
 
-def transcribe_audio(file_bytes: bytes, mime_type: str = "audio/mpeg") -> Dict[str, Any]:
+def transcribe_audio(file_bytes: bytes, mime_type: str = "audio/mpeg",
+                     source_filename: Optional[str] = None) -> Dict[str, Any]:
     """Transcribe an audio file with speaker diarization.
 
+    For video files (MP4, MOV, M4V, WEBM), the audio track is extracted
+    server-side via ffmpeg BEFORE the bytes are sent to Deepgram — that
+    way we ship 25 MB of audio instead of 500 MB of video over the wire,
+    and the transcription cost stays the same (Deepgram bills per minute
+    of audio, not per byte).
+
     Args:
-        file_bytes: Raw bytes of the audio file (mp3, m4a, wav, mp4, etc.)
-        mime_type:  Content type header to send. Common values:
-                      "audio/mpeg"  for .mp3
-                      "audio/mp4"   for .m4a / .m4b
-                      "audio/wav"   for .wav
-                      "video/mp4"   for .mp4 (extracts audio track)
+        file_bytes: Raw bytes of the uploaded file (audio OR video).
+        mime_type:  Content type header that would be sent if it were
+            already audio. Used as a fallback for the Deepgram call when
+            the file is audio. For video files, this is overridden with
+            audio/mpeg after extraction.
+        source_filename: Original filename — used to detect video formats
+            so we know whether to run ffmpeg first.
 
     Returns:
         dict with keys:
@@ -64,12 +156,26 @@ def transcribe_audio(file_bytes: bytes, mime_type: str = "audio/mpeg") -> Dict[s
           - labeled_text: str  — speaker-labeled markdown: "**Speaker A:** ..."
           - duration_seconds: float
           - language: str
+          - extracted_from_video: bool — True if we stripped video first
           - raw: dict          — full Deepgram response for debugging
     """
     if not file_bytes:
         return {"found": False, "error": "No audio data provided."}
     if not is_configured():
         return {"found": False, "error": "Deepgram API key not configured."}
+
+    # If this is a video file, strip the video track first so we only
+    # send audio to Deepgram. Big upload to us, small upload to them.
+    extracted_from_video = False
+    if source_filename and is_video_file(source_filename):
+        try:
+            source_ext = source_filename.rsplit(".", 1)[-1].lower()
+            file_bytes = extract_audio_from_video(file_bytes, source_ext=source_ext)
+            mime_type = "audio/mpeg"
+            extracted_from_video = True
+        except Exception as e:
+            return {"found": False,
+                    "error": f"Could not extract audio from video file: {e}"}
 
     try:
         req = urllib.request.Request(
@@ -164,6 +270,7 @@ def transcribe_audio(file_bytes: bytes, mime_type: str = "audio/mpeg") -> Dict[s
             "labeled_text": labeled_text,
             "duration_seconds": duration,
             "language": language,
+            "extracted_from_video": extracted_from_video,
             "raw": data,
         }
     except Exception as e:

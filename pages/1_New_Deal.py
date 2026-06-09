@@ -1094,12 +1094,24 @@ with st.expander(_expander_title, expanded=False):
         # --- Upload form ---------------------------------------------------
         c_upl, c_type = st.columns([3, 2])
         audio_file = c_upl.file_uploader(
-            "Audio recording",
-            type=["mp3", "m4a", "wav", "mp4", "mov", "aac"],
+            "Audio or video recording (up to 1 GB)",
+            type=["mp3", "m4a", "wav", "aac", "mp4", "mov", "m4v", "webm"],
             key="call_audio_uploader",
-            help="Upload the recording of your call. Files up to ~100MB work "
-                 "well. Longer files take longer to transcribe.",
+            help="Audio (mp3/m4a/wav) or video (mp4/mov from Google Meet) — "
+                 "videos are auto-converted to audio server-side.",
         )
+        with c_upl.expander("💡 Faster uploads: convert video to MP3 first"):
+            st.markdown(
+                "Video files are mostly picture data — the audio you need is "
+                "5-10% of the size. Converting locally first means a much "
+                "smaller upload and the same grading result.\n\n"
+                "**On Mac:** Open the .mp4 in QuickTime → File → Export As → "
+                "Audio Only → save as .m4a.\n\n"
+                "**Any OS:** Use [VLC](https://www.videolan.org/vlc/) — "
+                "File → Convert/Stream → pick Audio MP3 profile.\n\n"
+                "If you skip this, that's fine — we'll strip the video for "
+                "you (just a slower upload)."
+            )
         call_type = c_type.selectbox(
             "Call type",
             ["Process Call", "Offer Call", "Renegotiation",
@@ -1134,22 +1146,27 @@ with st.expander(_expander_title, expanded=False):
         )
 
         if do_analyze and audio_file is not None:
-            # Step 1: transcribe
-            with st.spinner("Transcribing audio via Deepgram… (30-60 sec for a 10-min call)"):
-                file_bytes = audio_file.getvalue()
-                # Pick a reasonable mime type from the upload's name
-                ext = (audio_file.name.rsplit(".", 1)[-1] or "").lower()
-                mime = {
-                    "mp3": "audio/mpeg",
-                    "m4a": "audio/mp4",
-                    "m4b": "audio/mp4",
-                    "wav": "audio/wav",
-                    "mp4": "audio/mp4",
-                    "mov": "video/quicktime",
-                    "aac": "audio/aac",
-                }.get(ext, "audio/mpeg")
-
-                tr = transcribe_mod.transcribe_audio(file_bytes, mime_type=mime)
+            # Step 1: transcribe (auto-extracts audio if uploaded a video)
+            file_bytes = audio_file.getvalue()
+            ext = (audio_file.name.rsplit(".", 1)[-1] or "").lower()
+            mime = {
+                "mp3": "audio/mpeg", "m4a": "audio/mp4", "m4b": "audio/mp4",
+                "wav": "audio/wav", "aac": "audio/aac",
+                "mp4": "video/mp4", "mov": "video/quicktime",
+                "m4v": "video/mp4", "webm": "video/webm",
+            }.get(ext, "audio/mpeg")
+            is_video = transcribe_mod.is_video_file(audio_file.name)
+            spinner_msg = (
+                f"Extracting audio from {ext.upper()} then transcribing "
+                "via Deepgram… (1-2 minutes for a video)"
+                if is_video
+                else "Transcribing audio via Deepgram… (30-60 sec for a 10-min call)"
+            )
+            with st.spinner(spinner_msg):
+                tr = transcribe_mod.transcribe_audio(
+                    file_bytes, mime_type=mime,
+                    source_filename=audio_file.name,
+                )
 
             if not tr.get("found"):
                 st.error(f"Transcription failed: {tr.get('error', 'unknown')}")
