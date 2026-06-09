@@ -212,23 +212,38 @@ def distinct_strategies() -> List[str]:
 #     ADD COLUMN IF NOT EXISTS coaching_note_by TEXT,
 #     ADD COLUMN IF NOT EXISTS coaching_note_at TIMESTAMPTZ;
 #
+#   -- v16 (run once to enable Training Calls):
+#   ALTER TABLE call_analyses
+#     ADD COLUMN IF NOT EXISTS is_training BOOLEAN DEFAULT FALSE,
+#     ADD COLUMN IF NOT EXISTS trainee_email TEXT,
+#     ADD COLUMN IF NOT EXISTS training_label TEXT;
+#
 #   -- No policies needed; the app uses service_role which bypasses RLS.
 
 def save_call_analysis(deal_id: Optional[int], call_type: str,
                        audio_filename: str, audio_duration_seconds: float,
                        transcript: Dict[str, Any], analysis: Dict[str, Any],
-                       user_email: Optional[str] = None) -> int:
+                       user_email: Optional[str] = None,
+                       is_training: bool = False,
+                       trainee_email: Optional[str] = None,
+                       training_label: Optional[str] = None) -> int:
     """Persist a completed call transcription + Claude analysis.
 
     Args:
-        deal_id: ID of the deal this call belongs to, or None for an
-            untied call (training/practice analysis with no deal record).
+        deal_id: ID of the deal this call belongs to, or None for training
+            calls / untied analyses (no real deal record).
         call_type: "Process Call" / "Offer Call" / "Renegotiation" / etc.
         audio_filename: original uploaded filename for reference
         audio_duration_seconds: from Deepgram metadata
         transcript: full transcribe_audio() result dict
         analysis: full analyze_call() result dict
-        user_email: who ran the analysis
+        user_email: who uploaded/ran the analysis (the manager for training)
+        is_training: True for role-play / training recordings, False for
+            real seller calls tied to a deal.
+        trainee_email: When is_training=True, the agent being trained
+            (the rep in the role-play, NOT the uploader).
+        training_label: free-text label for this training session
+            (e.g. "Mock Process Call - Week 1").
 
     Returns:
         The new row's ID, or 0 if the insert returned no data.
@@ -242,6 +257,9 @@ def save_call_analysis(deal_id: Optional[int], call_type: str,
         "audio_duration_seconds": float(audio_duration_seconds or 0),
         "transcript": transcript,
         "analysis": analysis,
+        "is_training": bool(is_training),
+        "trainee_email": trainee_email,
+        "training_label": training_label,
     }
     res = c.table("call_analyses").insert(row).execute()
     return res.data[0]["id"] if res.data else 0
@@ -292,9 +310,14 @@ def list_all_call_analyses(limit: int = 500) -> List[Dict[str, Any]]:
         "Accept": "application/json",
     }
 
-    # 1. Fetch call_analyses (without embed)
+    # 1. Fetch call_analyses (without embed). Exclude training calls so
+    # the Call Reviews page only shows real seller calls tied to deals.
+    # The `is_training=eq.false` filter also catches NULL rows because
+    # PostgREST treats `is.null` separately — we use `not.is.true` as a
+    # belt-and-suspenders fallback for rows that pre-date v16 (is_training
+    # column was added with DEFAULT FALSE so existing rows pass anyway).
     ca_url = (f"{base_url}/rest/v1/call_analyses"
-              f"?select=*&limit={int(limit)}")
+              f"?select=*&is_training=is.false&limit={int(limit)}")
     try:
         with urllib.request.urlopen(urllib.request.Request(ca_url, headers=headers),
                                      timeout=12) as resp:
@@ -406,6 +429,72 @@ def get_call_analysis(analysis_id: int) -> Optional[Dict[str, Any]]:
         row["deals"] = {}
 
     return row
+
+
+def list_training_calls(limit: int = 500) -> List[Dict[str, Any]]:
+    """List every training-call analysis (is_training=true).
+
+    Mirrors list_all_call_analyses() but pulls only training rows. No
+    deals join needed since training calls aren't tied to a property.
+    """
+    import json
+    import urllib.request
+    import urllib.error
+    import streamlit as st
+
+    base_url = st.secrets["supabase"]["url"].rstrip("/")
+    key = st.secrets["supabase"]["service_role_key"]
+    headers = {
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Accept": "application/json",
+    }
+    url = (f"{base_url}/rest/v1/call_analyses"
+           f"?select=*&is_training=is.true&limit={int(limit)}")
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers=headers),
+                                     timeout=12) as resp:
+            rows = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        raise RuntimeError(
+            f"Supabase REST returned HTTP {e.code} fetching training calls.\n"
+            f"URL: {url}\nBody: {body[:800]}"
+        )
+    if not isinstance(rows, list):
+        return []
+    rows.sort(key=lambda r: r.get("id") or 0, reverse=True)
+    return rows
+
+
+def get_training_call(call_id: int) -> Optional[Dict[str, Any]]:
+    """Fetch one training-call analysis by ID. Uses the same shape as
+    get_call_analysis() so the detail view can reuse rendering code."""
+    import json
+    import urllib.request
+    import streamlit as st
+
+    base_url = st.secrets["supabase"]["url"].rstrip("/")
+    key = st.secrets["supabase"]["service_role_key"]
+    headers = {
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Accept": "application/json",
+    }
+    url = (f"{base_url}/rest/v1/call_analyses"
+           f"?select=*&id=eq.{int(call_id)}&is_training=is.true&limit=1")
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers=headers),
+                                     timeout=12) as resp:
+            rows = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return None
+    if isinstance(rows, list) and rows:
+        row = rows[0]
+        # Empty deals dict so the existing PDF/render code doesn't choke
+        row["deals"] = {}
+        return row
+    return None
 
 
 def save_coaching_note(analysis_id: int, note: str, author_email: str) -> bool:

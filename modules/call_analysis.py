@@ -248,8 +248,48 @@ def build_user_prompt(
     transcript_text: str,
     deal_context: Dict[str, Any],
     call_type: str = "Process Call",
+    is_training: bool = False,
+    training_label: Optional[str] = None,
+    trainee_email: Optional[str] = None,
 ) -> str:
-    """The user message — contains the transcript and deal context."""
+    """The user message — contains the transcript and deal context.
+
+    For training (role-play) calls, deal context is replaced with a
+    short note so Claude knows not to penalize the rep for not reacting
+    to property data that doesn't exist.
+    """
+    if is_training:
+        label_line = (f"  Training label:    {training_label}\n"
+                      if training_label else "")
+        trainee_line = (f"  Trainee (rep):     {trainee_email}\n"
+                        if trainee_email else "")
+        return f"""CALL TYPE: {call_type}
+TRAINING / ROLE-PLAY: Yes
+{label_line}{trainee_line}
+DEAL CONTEXT: None — this is a practice role-play call, not a real seller
+call. Grade the rep on methodology adherence, structure, tonality, and
+craft (per the Process Call Checklist and full schema). Do NOT penalize
+the rep for not referencing specific property numbers, ARV, MAO, or
+strategy choice — there is no real deal to underwrite here. Focus on
+how well they executed the call mechanics: TART expectations, UMBC
+qualification flow, motivation discovery with Impact + Picture Perfect
+questions, property condition questioning (if applicable to the
+scenario), road blocks, objection handling, tonality, and non-committal
+language detection.
+
+---
+
+TRANSCRIPT (speakers separated by diarization):
+
+{transcript_text}
+
+---
+
+Grade this role-play call per the methodology. Return the JSON object
+as specified. Do not include any text outside the JSON.
+"""
+
+    # Real deal call — same as before
     prop = deal_context.get("property", {}) or {}
     rec = deal_context.get("recommendation", {}) or {}
     seller = deal_context.get("seller", {}) or {}
@@ -294,15 +334,23 @@ def analyze_call(
     transcript_text: str,
     deal_context: Dict[str, Any],
     call_type: str = "Process Call",
+    is_training: bool = False,
+    training_label: Optional[str] = None,
+    trainee_email: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Send the transcript to Claude and return the structured analysis.
 
     Args:
         transcript_text: The labeled transcript ("**Rep:** ...  **Seller:** ...")
         deal_context: {"property": prop_dict, "recommendation": rec_dict,
-                       "seller": seller_dict}
+                       "seller": seller_dict}. Ignored when is_training=True.
         call_type:    "Process Call" | "Offer Call" | "Renegotiation" |
-                      "Follow-up" | "Other"
+                      "Follow-up" | "Role-Play" | "Other"
+        is_training:  True for daily role-play / coaching recordings.
+                       Switches the user prompt so Claude doesn't penalize
+                       the rep for the absence of deal context.
+        training_label: free-text scenario label (passed into prompt for context)
+        trainee_email:  who the rep was in the role-play (passed into prompt)
 
     Returns:
         dict — either the parsed analysis with all the schema fields,
@@ -315,7 +363,12 @@ def analyze_call(
 
     try:
         system_prompt = build_system_prompt()
-        user_prompt = build_user_prompt(transcript_text, deal_context, call_type)
+        user_prompt = build_user_prompt(
+            transcript_text, deal_context, call_type,
+            is_training=is_training,
+            training_label=training_label,
+            trainee_email=trainee_email,
+        )
 
         client = _client()
         response = client.messages.create(
@@ -348,6 +401,9 @@ def analyze_call(
         parsed["_meta"] = {
             "model": MODEL,
             "call_type": call_type,
+            "is_training": bool(is_training),
+            "training_label": training_label,
+            "trainee_email": trainee_email,
             "input_tokens": getattr(response.usage, "input_tokens", None),
             "output_tokens": getattr(response.usage, "output_tokens", None),
         }
