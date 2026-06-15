@@ -864,8 +864,16 @@ def offer_terms(
     wholesale_mao_value: float,
     benchmark: float,
     buyer_demand_confirmed: bool,
+    asking: float = 0,
 ) -> Dict[str, float]:
-    """Returns dict with walk_away, opening, stretch."""
+    """Returns dict with walk_away, opening, stretch.
+
+    Critical rule: we NEVER offer the seller more than they're asking.
+    If their asking is below our math ceiling (cash MAO / wholesale MAO /
+    benchmark), the walk-away is clamped to asking. The 'extra' margin
+    between asking and our true MAO becomes additional profit, not a
+    higher offer to the seller.
+    """
     is_novation = "Novation" in strategy
     is_pass = strategy in ("NO-GO — Pass", "Pass — Gap to MAO Too Wide")
     is_mls = strategy == "MLS Referral"
@@ -880,9 +888,19 @@ def offer_terms(
     else:
         walk = wholesale_mao_value
 
+    # CLAMP: never offer above the seller's asking. If they said $245k and
+    # our math ceiling is $302k, we walk at $245k — the $57k gap is now
+    # extra margin for us, not a higher offer to them.
+    if asking and asking > 0 and asking < walk:
+        walk = asking
+
     opening = round_down_to_1k(walk * 0.96) if walk > 0 else 0
     stretch_bonus = 5_000 if buyer_demand_confirmed else 2_000
     stretch = walk + stretch_bonus if walk > 0 else 0
+
+    # And the stretch ceiling must also never exceed asking.
+    if asking and asking > 0 and stretch > asking:
+        stretch = asking
 
     return {"walk_away": walk, "opening": opening, "stretch": stretch}
 
@@ -960,7 +978,10 @@ def key_numbers_for(rec: Dict[str, Any], prop: Dict[str, Any]) -> List[tuple]:
         return [
             ("ARV", fmt_money(rec.get("arv", 0))),
             ("Total Rehab (end buyer's)", fmt_money(rec.get("rehab_total", 0))),
-            ("Our Wholesale Offer", fmt_money(rec.get("wholesale_offer", 0))),
+            # Use the clamped-by-asking value for what we'd actually offer
+            ("Our Wholesale Offer",
+             fmt_money(rec.get("wholesale_offer_to_seller",
+                                rec.get("wholesale_offer", 0)))),
             ("End Buyer MAO (Cash)", fmt_money(rec.get("cash_offer", 0))),
             ("Target Assignment Fee",
              fmt_money(rec.get("target_assignment_fee") or rec.get("net_profit", 0))),
@@ -979,7 +1000,9 @@ def key_numbers_for(rec: Dict[str, Any], prop: Dict[str, Any]) -> List[tuple]:
         ]
 
     # Default: Rehab strategy (incl. Short Sale → Rehab, Novation handled above)
-    # When asking < MAO, show profit at asking AND profit at MAO
+    # When asking < MAO, show profit at asking AND profit at MAO. The displayed
+    # Cash Offer / Wholesale Offer use the *_to_seller fields which are
+    # clamped to never exceed asking.
     at_asking_profit = rec.get("net_profit_at_asking")
     if at_asking_profit is not None:
         return [
@@ -988,19 +1011,27 @@ def key_numbers_for(rec: Dict[str, Any], prop: Dict[str, Any]) -> List[tuple]:
             ("Net Profit at Asking", fmt_money(at_asking_profit)),
             ("Net Profit at MAO", fmt_money(rec.get("net_profit_at_mao", 0))),
             ("ROI at Asking", fmt_pct(rec.get("roi_at_asking", 0))),
-            ("Cash Offer (MAO)", fmt_money(rec.get("cash_offer", 0))),
-            ("Wholesale Offer", fmt_money(rec.get("wholesale_offer", 0))),
+            ("Cash Offer",
+             fmt_money(rec.get("cash_offer_to_seller",
+                                rec.get("cash_offer", 0)))),
+            ("Wholesale Offer",
+             fmt_money(rec.get("wholesale_offer_to_seller",
+                                rec.get("wholesale_offer", 0)))),
             ("Deal Status", rec.get("deal_status", "—")),
         ]
 
-    # asking ≥ MAO — show standard 8 metrics
+    # asking ≥ MAO — show standard 8 metrics (no clamping needed since MAO is the cap)
     return [
         ("ARV", fmt_money(rec.get("arv", 0))),
         ("Total Rehab", fmt_money(rec.get("rehab_total", 0))),
         ("Net Profit", fmt_money(rec.get("net_profit", 0))),
         ("ROI", fmt_pct(rec.get("roi", 0))),
-        ("Cash Offer", fmt_money(rec.get("cash_offer", 0))),
-        ("Wholesale Offer", fmt_money(rec.get("wholesale_offer", 0))),
+        ("Cash Offer",
+         fmt_money(rec.get("cash_offer_to_seller",
+                            rec.get("cash_offer", 0)))),
+        ("Wholesale Offer",
+         fmt_money(rec.get("wholesale_offer_to_seller",
+                            rec.get("wholesale_offer", 0)))),
         ("Total Project Cost", fmt_money(rec.get("total_project_cost", 0))),
         ("Deal Status", rec.get("deal_status", "—")),
     ]
@@ -1294,8 +1325,25 @@ def compute_recommendation(inputs: Dict[str, Any],
             orig_flat, orig_pct, rate, duration,
         )
 
+    # cash_offer = MATH ceiling (what an end buyer could pay max).
+    # wholesale_offer = ceiling minus default $15k assignment fee.
+    # These STAY as math ceilings — DC and Assignment downstream use them
+    # to model end-buyer behavior. The "what we actually offer the seller"
+    # numbers are computed separately below.
     cash_offer = round_down_to_1k(max(0, cash_mao_value))
     wholesale_offer = round_down_to_1k(max(0, cash_mao_value - params.get("default_assignment_fee", 15_000)))
+
+    # What we'd ACTUALLY offer the seller: clamped by asking so we never
+    # overbid. If asking < ceiling, the gap becomes additional margin we
+    # capture downstream (bigger Assignment fee, more profit at asking
+    # for Rehab).
+    cash_offer_to_seller = (round_down_to_1k(asking)
+                            if (asking and asking > 0 and asking < cash_offer)
+                            else cash_offer)
+    wholesale_offer_to_seller = (round_down_to_1k(asking)
+                                  if (asking and asking > 0
+                                      and asking < wholesale_offer)
+                                  else wholesale_offer)
 
     # Final loan + holding at the resolved cash_offer
     final_loan = compute_loan(cash_offer, arv, ltc, arv_cap)
@@ -1437,9 +1485,17 @@ def compute_recommendation(inputs: Dict[str, Any],
         cost_of_money_amount = 0
         likely_total_holding = 0
         likely_monthly_holding = 0
-        # The fee is set after this block via target_fat_fee or default
-        # We'll set net_profit from the fee after that block runs
-        net_profit = params.get("default_assignment_fee", 15_000)
+        # When seller's asking is BELOW the end-buyer Cash MAO, the spread
+        # we can capture is (cash_mao − asking − buyer cushion). That's
+        # usually a much bigger fee than the default $15k floor.
+        # We leave a $5k cushion under the end-buyer's MAO so the deal
+        # still pencils for them.
+        if asking and asking > 0 and asking < cash_offer:
+            spread_opportunity = cash_offer - asking - 5_000
+            net_profit = max(params.get("default_assignment_fee", 15_000),
+                              spread_opportunity)
+        else:
+            net_profit = params.get("default_assignment_fee", 15_000)
         tpc = 0
         roi = 0  # n/a since no capital deployed
         proforma_kind = "assignment"
@@ -1488,9 +1544,10 @@ def compute_recommendation(inputs: Dict[str, Any],
         )
         proforma_kind = "rehab"
 
-    # Offer terms
+    # Offer terms — pass asking so walk_away, opening, stretch are all
+    # clamped to never exceed what the seller is asking for.
     terms = offer_terms(strategy, cash_offer, wholesale_offer, benchmark,
-                        buyer_demand_confirmed)
+                        buyer_demand_confirmed, asking=asking)
 
     # Target assignment fee
     if "heavy scope" in strategy:
@@ -1509,8 +1566,22 @@ def compute_recommendation(inputs: Dict[str, Any],
             tpc = 0
             roi = 0
     elif "Wholesale" in strategy or "Short Sale" in strategy:
-        recommended_fee = params["default_assignment_fee"]
-        fee_note = "Default $15k; flex down to $2k floor to clear"
+        # When seller's asking is below the end-buyer Cash MAO, the spread we
+        # can capture is bigger than the $15k default floor. Same logic as
+        # the assignment branch's net_profit calc — keeps both numbers in sync.
+        if (proforma_kind == "assignment" and asking and asking > 0
+                and asking < cash_offer):
+            spread_opportunity = cash_offer - asking - 5_000
+            recommended_fee = max(params["default_assignment_fee"],
+                                   spread_opportunity)
+            fee_note = (
+                f"Asking ${asking:,.0f} is below end-buyer MAO ${cash_offer:,.0f}. "
+                f"Spread we can capture (with $5k buyer cushion): "
+                f"${spread_opportunity:,.0f}."
+            )
+        else:
+            recommended_fee = params["default_assignment_fee"]
+            fee_note = "Default $15k; flex down to $2k floor to clear"
     else:
         recommended_fee = None
         fee_note = ""
@@ -1588,6 +1659,11 @@ def compute_recommendation(inputs: Dict[str, Any],
         "roi": roi,
         "cash_offer": cash_offer,
         "wholesale_offer": wholesale_offer,
+        # What we'd actually offer the seller — clamped by asking. These are
+        # the numbers shown on memos and to the homeowner; cash_offer above
+        # is the math ceiling that drives DC / Assignment downstream.
+        "cash_offer_to_seller": cash_offer_to_seller,
+        "wholesale_offer_to_seller": wholesale_offer_to_seller,
         "deal_status": status,
         "deal_status_reason": status_reason,
         "mls_commission_estimate": mls_comm,

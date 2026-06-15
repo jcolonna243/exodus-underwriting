@@ -67,13 +67,23 @@ holding = float(rec.get("total_holding", 0) or 0)
 cost_of_money = float(rec.get("cost_of_money", 0) or 0)
 our_costs = purchase_closing + sale_closing + holding + cost_of_money
 
-# Use net_profit_at_mao when present (asking < MAO case stamps both),
-# else fall back to net_profit. We want the rehab-math minimum profit.
-min_profit = float(
-    rec.get("net_profit_at_mao") or rec.get("net_profit", 0) or 0
+# The seller-facing cash offer is clamped to never exceed asking. When
+# asking < MAO, the gap becomes additional margin captured as profit.
+cash_offer = float(
+    rec.get("cash_offer_to_seller") or rec.get("cash_offer", 0) or 0
 )
 
-cash_offer = float(rec.get("cash_offer", 0) or 0)
+# Recompute the minimum profit so the math reconciles back to ARV.
+# When asking < MAO, our actual profit = ARV − rehab − our_costs − asking,
+# which is BIGGER than net_profit_at_mao. We show the seller our actual
+# extracted margin (not the conservative MAO-floor) — that's honest:
+# this is what we'd make on THIS deal if they accept our offer.
+min_profit = arv - rehab_total - our_costs - cash_offer
+if min_profit < 0:
+    # Edge case (shouldn't happen on a GO deal) — fall back to MAO profit
+    min_profit = float(
+        rec.get("net_profit_at_mao") or rec.get("net_profit", 0) or 0
+    )
 
 
 # --- Header ------------------------------------------------------------
