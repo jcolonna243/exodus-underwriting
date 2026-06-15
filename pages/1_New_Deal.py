@@ -986,6 +986,32 @@ if c4.button("Reset form", use_container_width=True):
     st.session_state["_pending_reset"] = True
     st.rerun()
 
+# Homeowner Presentation — kitchen-table view, only available after save
+# so the saved deal context (comps + rehab + recommendation) is on disk.
+_homeowner_deal_id = st.session_state.get("loaded_deal_id")
+if _homeowner_deal_id:
+    if st.button(
+        "🏠 Show to Homeowner",
+        use_container_width=True,
+        help="Open the seller-facing breakdown — shows ARV, repairs, our "
+             "costs, our minimum profit, and the cash offer. No jargon, "
+             "no other strategies. Designed to be screen-shared or printed "
+             "at the kitchen table.",
+    ):
+        st.session_state["homeowner_deal_id"] = int(_homeowner_deal_id)
+        try:
+            st.switch_page("pages/6_Homeowner_Presentation.py")
+        except Exception:
+            st.info(
+                "Deal queued. Open the **🏠 Homeowner Presentation** page "
+                "from the left sidebar."
+            )
+else:
+    st.caption(
+        "💡 Save this deal first to unlock the **🏠 Show to Homeowner** view "
+        "— a clean kitchen-table breakdown of how we arrived at the offer."
+    )
+
 # ============================================================================
 # 🎤 SALES CALL ANALYSIS
 # ============================================================================

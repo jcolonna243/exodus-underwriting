@@ -80,8 +80,8 @@ if selected_id > 0:
             for j, (label, value) in enumerate(metrics[i:i + 4]):
                 cols[j].metric(label, value)
 
-        # Action row — Edit / Word memo / PDF memo / Delete
-        c_edit, c_word, c_pdf, c_del = st.columns(4)
+        # Action row — Edit / Homeowner / Word / PDF / Delete (5 columns)
+        c_edit, c_home, c_word, c_pdf, c_del = st.columns(5)
 
         # Edit — queue the deal for loading on New Deal page and switch.
         # No RentCast call needed; comps and inputs are restored from JSONB.
@@ -98,16 +98,33 @@ if selected_id > 0:
             try:
                 st.switch_page("pages/1_New_Deal.py")
             except Exception:
-                # Streamlit < 1.30 fallback — show a manual nav prompt
                 st.info(
                     "Deal queued. Open the **New Deal** page from the "
                     "left sidebar to continue editing."
                 )
 
+        # Show to Homeowner — open the kitchen-table view of just the rehab math
+        if c_home.button(
+            "🏠 Show to Homeowner",
+            use_container_width=True,
+            help="Open the seller-facing breakdown — ARV, repairs, our costs, "
+                 "our minimum profit, and the cash offer. No jargon, no other "
+                 "strategies. Designed to be screen-shared or printed at the "
+                 "kitchen table.",
+        ):
+            st.session_state["homeowner_deal_id"] = int(deal["id"])
+            try:
+                st.switch_page("pages/6_Homeowner_Presentation.py")
+            except Exception:
+                st.info(
+                    "Deal queued. Open the **🏠 Homeowner Presentation** page "
+                    "from the left sidebar."
+                )
+
         try:
             word_bytes = build_word_memo(prop, outputs, seller)
             c_word.download_button(
-                "📄 Word memo", word_bytes,
+                "📄 Word", word_bytes,
                 file_name=f"Exodus_Memo_Deal_{deal['id']}.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 use_container_width=True)
@@ -117,7 +134,7 @@ if selected_id > 0:
         try:
             pdf_bytes = build_pdf_memo(prop, outputs, seller)
             c_pdf.download_button(
-                "📄 PDF memo", pdf_bytes,
+                "📄 PDF", pdf_bytes,
                 file_name=f"Exodus_Memo_Deal_{deal['id']}.pdf",
                 mime="application/pdf",
                 use_container_width=True)
