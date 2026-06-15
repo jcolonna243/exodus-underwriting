@@ -308,7 +308,9 @@ with tab_strat:
         ("novation_holding_costs", "Novation holding costs ($)", 250),
         ("mls_min_commission", "MLS minimum commission to be viable", 250),
         ("fat_fee_buyer_floor", "Fat fee — end buyer should keep ≥ this", 1000),
-        ("default_assignment_fee", "Default assignment fee", 500),
+        ("default_assignment_fee", "Default assignment fee (target)", 500),
+        ("assignment_fee_min", "Assignment fee floor (anything below = not worth it)", 250),
+        ("assignment_fee_max", "Assignment fee ceiling (above = forces Double Close)", 500),
     ]
     PCT_KEYS = [
         ("mls_rehab_pct_of_arv", "MLS rehab cap as % of ARV"),

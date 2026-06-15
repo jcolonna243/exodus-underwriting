@@ -53,6 +53,14 @@ DEFAULTS = {
     # Targets and thresholds
     "target_roi": 0.10,
     "default_assignment_fee": 15_000,
+    # Assignment fee practical floor/ceiling. Anything above the ceiling
+    # triggers end-buyer title-attorney scrutiny ("why is the wholesaler
+    # taking $X off the table?"), so deals with bigger spreads are routed
+    # to Double Close instead — DC hides the end-buyer price from the seller
+    # and captures the full margin cleanly. Anything below the floor isn't
+    # worth the effort of an assignment.
+    "assignment_fee_min": 5_000,
+    "assignment_fee_max": 25_000,
     "min_profit_threshold": 30_000,
     # Novation
     "novation_retail_costs_pct": 0.09,
@@ -975,6 +983,20 @@ def key_numbers_for(rec: Dict[str, Any], prop: Dict[str, Any]) -> List[tuple]:
         ]
 
     if kind == "assignment":
+        # Format the Target Assignment Fee as a range display (e.g. "$25,000
+        # (range $5K–$25K)") so reps see the practical cap and floor.
+        fee_target = rec.get("target_assignment_fee") or rec.get("net_profit", 0)
+        try:
+            from modules.settings import get_setting as _g
+            saved = _g("strategy_thresholds") or {}
+        except Exception:
+            saved = {}
+        fee_floor = saved.get("assignment_fee_min", 5_000)
+        fee_ceiling = saved.get("assignment_fee_max", 25_000)
+        fee_display = (
+            f"{fmt_money(fee_target)} "
+            f"(range {fmt_money(fee_floor)}–{fmt_money(fee_ceiling)})"
+        )
         return [
             ("ARV", fmt_money(rec.get("arv", 0))),
             ("Total Rehab (end buyer's)", fmt_money(rec.get("rehab_total", 0))),
@@ -983,8 +1005,7 @@ def key_numbers_for(rec: Dict[str, Any], prop: Dict[str, Any]) -> List[tuple]:
              fmt_money(rec.get("wholesale_offer_to_seller",
                                 rec.get("wholesale_offer", 0)))),
             ("End Buyer MAO (Cash)", fmt_money(rec.get("cash_offer", 0))),
-            ("Target Assignment Fee",
-             fmt_money(rec.get("target_assignment_fee") or rec.get("net_profit", 0))),
+            ("Target Assignment Fee", fee_display),
             ("Net Profit", fmt_money(rec.get("net_profit", 0))),
             ("Deal Status", rec.get("deal_status", "—")),
         ]
@@ -1485,17 +1506,22 @@ def compute_recommendation(inputs: Dict[str, Any],
         cost_of_money_amount = 0
         likely_total_holding = 0
         likely_monthly_holding = 0
+        fee_floor = params.get("assignment_fee_min", 5_000)
+        fee_ceiling = params.get("assignment_fee_max", 25_000)
         # When seller's asking is BELOW the end-buyer Cash MAO, the spread
-        # we can capture is (cash_mao − asking − buyer cushion). That's
-        # usually a much bigger fee than the default $15k floor.
-        # We leave a $5k cushion under the end-buyer's MAO so the deal
-        # still pencils for them.
+        # we can capture is (cash_mao − asking − buyer cushion). We cap at
+        # the assignment ceiling — anything bigger gets killed by the end-
+        # buyer's title attorney and forces a Double Close (handled by the
+        # auto-router below). Seller-cushion logic keeps the deal attractive
+        # for the end buyer.
         if asking and asking > 0 and asking < cash_offer:
             spread_opportunity = cash_offer - asking - 5_000
-            net_profit = max(params.get("default_assignment_fee", 15_000),
-                              spread_opportunity)
+            net_profit = max(fee_floor, min(spread_opportunity, fee_ceiling))
         else:
-            net_profit = params.get("default_assignment_fee", 15_000)
+            # Default case (asking ≥ MAO): use the team's default targeted fee,
+            # but never below the floor or above the ceiling.
+            default_fee = params.get("default_assignment_fee", 15_000)
+            net_profit = max(fee_floor, min(default_fee, fee_ceiling))
         tpc = 0
         roi = 0  # n/a since no capital deployed
         proforma_kind = "assignment"
@@ -1566,21 +1592,39 @@ def compute_recommendation(inputs: Dict[str, Any],
             tpc = 0
             roi = 0
     elif "Wholesale" in strategy or "Short Sale" in strategy:
-        # When seller's asking is below the end-buyer Cash MAO, the spread we
-        # can capture is bigger than the $15k default floor. Same logic as
-        # the assignment branch's net_profit calc — keeps both numbers in sync.
+        # Assignment fee range: $5k floor, $25k ceiling. Below floor isn't
+        # worth the effort; above ceiling triggers end-buyer title pushback
+        # ("why is the wholesaler taking $X off the table?") and forces a DC.
+        fee_floor = params.get("assignment_fee_min", 5_000)
+        fee_ceiling = params.get("assignment_fee_max", 25_000)
         if (proforma_kind == "assignment" and asking and asking > 0
                 and asking < cash_offer):
             spread_opportunity = cash_offer - asking - 5_000
-            recommended_fee = max(params["default_assignment_fee"],
-                                   spread_opportunity)
+            capped_fee = max(fee_floor, min(spread_opportunity, fee_ceiling))
+            recommended_fee = capped_fee
+            if spread_opportunity > fee_ceiling:
+                fee_note = (
+                    f"Asking ${asking:,.0f} below end-buyer MAO ${cash_offer:,.0f}. "
+                    f"Natural spread ${spread_opportunity:,.0f} exceeds the "
+                    f"${fee_ceiling:,.0f} assignment ceiling — typically requires "
+                    "Double Close to capture cleanly. Fee shown is the assignment "
+                    f"cap; range ${fee_floor:,.0f}–${fee_ceiling:,.0f}."
+                )
+            else:
+                fee_note = (
+                    f"Asking ${asking:,.0f} below end-buyer MAO ${cash_offer:,.0f}. "
+                    f"Spread (with $5k buyer cushion): ${spread_opportunity:,.0f}. "
+                    f"Range ${fee_floor:,.0f}–${fee_ceiling:,.0f}."
+                )
+        elif proforma_kind == "assignment":
+            default_fee = params.get("default_assignment_fee", 15_000)
+            recommended_fee = max(fee_floor, min(default_fee, fee_ceiling))
             fee_note = (
-                f"Asking ${asking:,.0f} is below end-buyer MAO ${cash_offer:,.0f}. "
-                f"Spread we can capture (with $5k buyer cushion): "
-                f"${spread_opportunity:,.0f}."
+                f"Targeted ${recommended_fee:,.0f}; "
+                f"range ${fee_floor:,.0f}–${fee_ceiling:,.0f}."
             )
         else:
-            recommended_fee = params["default_assignment_fee"]
+            recommended_fee = params.get("default_assignment_fee", 15_000)
             fee_note = "Default $15k; flex down to $2k floor to clear"
     else:
         recommended_fee = None

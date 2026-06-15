@@ -810,18 +810,23 @@ if _other_alts:
     )
 
     def _seller_gets_for(r):
-        """How much the seller walks away with under each strategy."""
+        """How much the seller walks away with under each strategy.
+        Uses the clamped *_to_seller fields so the displayed number never
+        exceeds the seller's asking price (v19/v20 fix)."""
         kind = r.get("proforma_kind")
         if kind == "novation":
             return r.get("benchmark", 0)
         if kind == "assignment":
-            return r.get("wholesale_offer", 0)
+            return r.get("wholesale_offer_to_seller",
+                         r.get("wholesale_offer", 0))
         if kind == "dc":
             return r.get("likely_purchase_price", 0)
         if kind == "pass":
             return r.get("benchmark", 0) or r.get("asking", 0)
         # rehab
-        return r.get("likely_purchase_price", 0) or r.get("cash_offer", 0)
+        return (r.get("cash_offer_to_seller")
+                or r.get("likely_purchase_price", 0)
+                or r.get("cash_offer", 0))
 
     def _exodus_makes_for(r):
         """How much Exodus actually takes home under each strategy."""
@@ -843,7 +848,20 @@ if _other_alts:
                 st.markdown(f"**{_alt_strat}**")
                 m1, m2 = st.columns(2)
                 m1.metric("Seller gets", f"${_alt_seller:,.0f}")
-                m2.metric("Exodus makes", f"${_alt_exodus:,.0f}")
+                # Add fee-range help on assignment so the rep sees the
+                # practical cap (above $25k forces a Double Close).
+                if alt.get("proforma_kind") == "assignment":
+                    m2.metric(
+                        "Exodus makes",
+                        f"${_alt_exodus:,.0f}",
+                        help="Assignment fee range: $5,000 – $25,000. "
+                             "If the natural spread exceeds $25,000, "
+                             "switch to Double Close to capture the full "
+                             "margin — end-buyer title attorneys typically "
+                             "push back on bigger assignment fees.",
+                    )
+                else:
+                    m2.metric("Exodus makes", f"${_alt_exodus:,.0f}")
                 # Show any caveats
                 if "Novation" in _alt_strat and not alt.get("novation_feasible"):
                     st.caption(

@@ -19,6 +19,7 @@ import streamlit as st
 
 from modules.auth import require_login, sidebar_account_widget
 from modules.db import get_deal
+from modules.homeowner_pdf import build_homeowner_pdf
 from modules.strategy import compute_recommendation, rehab_breakdown
 
 
@@ -110,9 +111,41 @@ st.markdown(
 
 st.caption(
     "We want to show you our exact math — from start to finish. No black box, "
-    "no surprises. Use the **Print** option (⌘+P / Ctrl+P) to leave a copy "
-    "with the homeowner."
+    "no surprises."
 )
+
+# --- Download as PDF (top of page, prominent) -------------------------
+# Generated on-the-fly with the same numbers shown below. Print-quality
+# typography, color-coded section banners, comps + rehab tables included —
+# meant to be left with the homeowner as a tangible artifact of transparency.
+try:
+    sqft_for_items = int(prop.get("sqft", 0) or 0)
+    baths_for_items = float(prop.get("baths", 0) or 0)
+    pool_for_items = (prop.get("pool", "No") == "Yes")
+    stories_for_items = prop.get("stories", 1) or 1
+    rehab_items_for_pdf = rehab_breakdown(
+        inputs.get("rehab", {}) or {},
+        sqft_for_items, baths_for_items, pool_for_items,
+        stories=stories_for_items,
+    )
+    pdf_bytes = build_homeowner_pdf(prop, rec, inputs, rehab_items_for_pdf)
+    safe_addr = "".join(c if c.isalnum() or c in "-_" else "_"
+                         for c in (prop.get("address", "deal") or "deal"))[:60]
+    safe_date = dt_safe = __import__("datetime").datetime.now().strftime("%Y-%m-%d")
+    c_dl, _ = st.columns([2, 5])
+    c_dl.download_button(
+        "📄 Download as PDF",
+        data=pdf_bytes,
+        file_name=f"Cash_Offer_Breakdown_{safe_addr}_{safe_date}.pdf",
+        mime="application/pdf",
+        use_container_width=True,
+        type="primary",
+        help="Polished, print-ready PDF that mirrors the page below — "
+             "color-coded sections, comps + rehab tables, math reconciliation. "
+             "Designed to leave with the homeowner.",
+    )
+except Exception as e:
+    st.warning(f"Could not generate the PDF version: {e}")
 
 st.markdown("---")
 
@@ -376,8 +409,19 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Print hint
-st.info(
-    "💡 **To print or save as PDF:** press ⌘+P (Mac) or Ctrl+P (Windows) "
-    "in your browser. Choose 'Save as PDF' to leave a copy with the homeowner."
-)
+# Bottom PDF download button — duplicated from the top so the rep doesn't
+# have to scroll back up after walking the seller through the page.
+st.markdown("---")
+c_dl_b, _ = st.columns([2, 5])
+try:
+    c_dl_b.download_button(
+        "📄 Download as PDF",
+        data=pdf_bytes,  # already built above
+        file_name=f"Cash_Offer_Breakdown_{safe_addr}_{safe_date}.pdf",
+        mime="application/pdf",
+        use_container_width=True,
+        type="primary",
+        key="homeowner_pdf_bottom",
+    )
+except Exception:
+    pass
