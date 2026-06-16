@@ -635,6 +635,100 @@ The rep is the seller's representative inside our company. The partners (us) are
 
 ---
 
-**End of v1.0.**
+## 13. Script Variant — The Foreclosure Process Script
 
-Jo — mark this up directly. Flag anything that doesn't match how Exodus runs deals (we adopted Results Driven but Florida specifics like dock stamps, no Ohio property tax framing, your team names, our buyer list dynamics may differ from what Alec teaches). Once you've redlined this, I'll incorporate your edits, optionally pull in the 4 Daily Training PPTs to fill any remaining gaps, and then this becomes the system prompt the call-analysis AI uses for every recorded Process Call going forward.
+Reps use a **different process script** when the lead is a foreclosure (NOD, sale-date letters, behind on the mortgage). The structure is the same five-act flow (Intro → Set Expectations → Motivation → Property Condition → Road Blocks → Set Expectations close), but the language, the motivation questions, and an additional **Educational Pivot** section all change.
+
+When the AI is grading a call that used the Foreclosure Process Script (not the standard one), it should grade against the variant rules below in addition to the universal rules above.
+
+### 13.1 The Foreclosure-Specific Intro
+
+Instead of "I know this may be a little out of the blue," the rep names the bank trouble directly:
+
+> "Hi this is [Name], how are you doing today? I am reaching out because it seems like the bank has been giving you trouble and I specialize in helping people through these situations. Most people don't know they have options. Would you like to talk about them?"
+
+Then pause and wait for the seller to respond before continuing.
+
+**What the AI should check:** Did the rep open with the empathetic "bank giving you trouble" framing? Did they position themselves as a specialist (not a generic buyer)? Did they pause for the seller's response before barreling into the next section?
+
+### 13.2 Foreclosure-Specific Motivation Questions
+
+After Set Expectations, the rep asks foreclosure-specific situation questions before any Impact / Picture Perfect questions:
+
+- "How long have you been getting letters or calls from the bank?"
+- "Have they mentioned a sale date yet?"
+- "Are you working with anyone to try to stop it?"
+
+These uncover the timeline urgency (close to auction vs. still early) and any existing mitigation efforts (an attorney, a HUD counselor, a forbearance application in progress). The rep mirrors and shows empathy throughout — "Yeah, I totally get that," "Makes sense," "You're not alone." Then Socratic / Impact questions follow as normal.
+
+**What the AI should check:** Did the rep ask all THREE foreclosure-specific situation questions? Did they ask in the right order (before Impact questions)? Did they use empathy phrases like "you're not alone" / "I totally get that" without ever using sympathy phrases like "I'm sorry"?
+
+### 13.3 The Educational Pivot (UNIQUE to the Foreclosure Script)
+
+After motivation discovery, BEFORE Property Condition, the rep walks the seller through the four routes available to a homeowner in foreclosure:
+
+**Script verbatim:**
+
+> "So here's what most folks don't realize — there are basically 4 main routes people take right now:"
+
+**Route 1: Reinstate the loan.** Rep asks:
+- "Do you know how much you are behind including late fees, attorney fees, and any other fees that may exist?"
+- "Do you have access to that kind of money?"
+- "What will you do if you cannot come up with those funds?"
+
+**Route 2: Short sale.** Rep explains that the bank approves a discounted payoff but only certain situations qualify:
+- Death of significant other
+- Loss of job or reduced pay
+- Medical issues and medical bills
+
+**Route 3: File bankruptcy.** Rep explains: "Sometimes it helps, sometimes it backfires. The biggest thing to think about here is if you want to buy anything with credit for the next 7 years, this would not allow you to do that."
+
+**Route 4: Sell before the sale.** Rep frames the benefits: stop the bank cold, protect your credit, often walk away clean — "oftentimes people we work with are able to walk away with some cash and a fresh start."
+
+**Then the routing question:** "Which route are you most interested in?"
+
+- If the seller picks **Sell** → continue with the rest of the Process script (Property Condition, Road Blocks, Set Expectations close).
+- If the seller picks **Reinstate / Short Sale / Bankruptcy** → give them homework instead of pushing the sale:
+  - **Reinstate** → "Go find the reinstatement funds. Here's the number you need to hit."
+  - **Short Sale** → connect them with a short-sale agent.
+  - **Bankruptcy** → connect them with a bankruptcy attorney and tell them what questions to ask.
+- Either way, the rep is positioned as a true advisor, not a vulture.
+
+**What the AI should check:**
+1. Did the rep ACTUALLY walk through all 4 routes?
+2. For Reinstate: did they ask the three probing questions (amount in arrears, access to funds, what if no funds)?
+3. For Short Sale: did they accurately list the qualifying situations?
+4. For Bankruptcy: did they give the 7-year credit warning?
+5. For Sell: did they emphasize the "walk away with cash, fresh start" upside?
+6. Did the rep ask which route the seller is most interested in?
+7. If the seller picked a non-sell route, did the rep gracefully redirect with homework rather than push the sale?
+
+### 13.4 Closing — Credibility Packet
+
+The Foreclosure script's Set Expectations close adds one extra step the standard script doesn't have:
+
+> "I have a credibility packet that I would like to email you so you can see some information about our company, there are frequently asked questions that have answers for you, and it will talk through what the next step would look like if you choose to work with us. What is the best email to send that to?"
+
+This builds trust because foreclosure sellers are MORE skeptical than non-distressed sellers — they've been lied to by debt collectors and pseudo-rescue operators for weeks. The credibility packet preempts that suspicion.
+
+The rep then proceeds with the standard close (20–30 min to talk with partners, then 5-min callback, confident yes/no expected, permission to say no, schedule the callback time).
+
+**What the AI should check:** Did the rep offer the credibility packet? Did they ask for the seller's email? Did they otherwise follow the standard close (TART expectations for the next call)?
+
+### 13.5 Grading Summary for Foreclosure Calls
+
+When the AI grades a Foreclosure Process Call, it grades on:
+
+- **Everything in the standard Process Call Checklist** (UMBC, Motivation, Property Condition, Road Blocks, Set Expectations open + close, tonality, objection handling, etc.)
+- **PLUS** the foreclosure-specific items in §13.1–13.4:
+  - Empathetic foreclosure intro
+  - Three foreclosure situation questions (bank letters, sale date, who they're working with)
+  - Full Educational Pivot (4 routes with all probing questions)
+  - Route-selection question and graceful redirect when non-sell
+  - Credibility packet offer + email capture
+
+Reps practicing on this script during role-plays will be evaluated against both rubrics combined.
+
+---
+
+**End of v1.0.**

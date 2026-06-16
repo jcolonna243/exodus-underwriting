@@ -213,6 +213,16 @@ with st.container(border=True):
              "evaluates the structure.",
     )
 
+    c_script, _ = st.columns([2, 3])
+    script_used = c_script.selectbox(
+        "Script used",
+        ["Standard Process Script", "Foreclosure Process Script"],
+        key="training_script_used",
+        help="Which script the rep was practicing. Foreclosure adds the "
+             "Educational Pivot (4 routes) and three foreclosure-specific "
+             "situation questions to the grading rubric.",
+    )
+
     c_trainee, c_label = st.columns([2, 3])
     trainee_pick = c_trainee.selectbox(
         "Trainee (who was the rep?)",
@@ -290,6 +300,7 @@ with st.container(border=True):
                     is_training=True,
                     training_label=training_label or None,
                     trainee_email=trainee_email_final,
+                    script_used=script_used,
                 )
 
             if "error" in analysis:

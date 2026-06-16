@@ -111,10 +111,16 @@ def build_checklist_pdf(
     city_state = ", ".join(filter(None, [
         deal_context.get("city", ""), deal_context.get("state", "")
     ]))
+    _meta = analysis.get("_meta", {}) or {}
+    _cl = analysis.get("process_call_checklist", {}) or {}
+    script_used_label = (_cl.get("script_used")
+                         or _meta.get("script_used")
+                         or "Standard Process Script")
     meta_lines = [
         f"<b>Property:</b> {addr}{(', ' + city_state) if city_state else ''}",
         f"<b>Recommended strategy:</b> {deal_context.get('strategy', '—')}",
-        f"<b>Call type:</b> {call_meta.get('call_type', '—')}",
+        f"<b>Call type:</b> {call_meta.get('call_type', '—')} "
+        f"&nbsp;&nbsp; <b>Script used:</b> {script_used_label}",
         f"<b>Uploaded by:</b> {call_meta.get('uploaded_by', '—')} "
         f"&nbsp;&nbsp; <b>Date:</b> {(call_meta.get('uploaded_at') or '')[:10]}"
         f" &nbsp;&nbsp; <b>Duration:</b> {call_meta.get('duration_seconds', 0):.0f}s",
@@ -190,6 +196,19 @@ def build_checklist_pdf(
         ("e. Perfect Picture / Goal", mot.get("perfect_picture")),
     ])
 
+    # Foreclosure Pivot — only when the rep used the Foreclosure Process Script
+    fp = checklist.get("foreclosure_pivot", {}) or {}
+    if fp.get("applicable", False):
+        add_section("Foreclosure Pivot — Educational (4 Routes)", [
+            ("a. Explained 4 routes",         fp.get("explained_4_routes")),
+            ("b. Reinstate probing (3 Qs)",   fp.get("reinstate_probing")),
+            ("c. Short-sale qualifying",      fp.get("short_sale_qualifying")),
+            ("d. Bankruptcy 7-yr credit warn", fp.get("bankruptcy_credit_warning")),
+            ("e. Sell route upside",          fp.get("sell_route_upside")),
+            ("f. Asked which route",          fp.get("asked_which_route")),
+            ("g. Graceful redirect (if non-sell)", fp.get("graceful_redirect_if_non_sell")),
+        ])
+
     pc = checklist.get("property_condition") or {}
     rows.append([
         bool(pc.get("covered", False)),
@@ -207,12 +226,17 @@ def build_checklist_pdf(
     ])
 
     se_close = checklist.get("set_expectations_close", {}) or {}
-    add_section("Set Expectations (close)", [
+    close_items = [
         ("a. Time",                 se_close.get("time")),
         ("b. Agenda",               se_close.get("agenda")),
         ("c. Result",               se_close.get("result")),
         ("d. Permission to say No", se_close.get("permission_to_say_no")),
-    ])
+    ]
+    if fp.get("applicable", False):
+        close_items.append(
+            ("e. Credibility packet offered", se_close.get("credibility_packet"))
+        )
+    add_section("Set Expectations (close)", close_items)
 
     # Build the actual Table data — render Paragraphs for wrapping
     table_data: List[List[Any]] = [[

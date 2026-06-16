@@ -125,7 +125,8 @@ JSON. The schema is:
   "process_call_checklist": {{
     "applicable": true | false,
     "applicable_note": "string — if not applicable, briefly why (e.g. 'This was an Offer Call, not a Process Call')",
-    "intro": {{ "covered": true | false, "feedback": "string — short, specific" }},
+    "script_used": "Standard Process Script" | "Foreclosure Process Script",
+    "intro": {{ "covered": true | false, "feedback": "string — short, specific. For Foreclosure script: did rep open with the empathetic 'bank giving you trouble' framing?" }},
     "set_expectations_open": {{
       "time": {{ "covered": true | false, "feedback": "string" }},
       "agenda": {{ "covered": true | false, "feedback": "string" }},
@@ -134,12 +135,25 @@ JSON. The schema is:
       "urgency": {{ "covered": true | false, "feedback": "string" }}
     }},
     "motivation": {{
-      "situation": {{ "covered": true | false, "feedback": "string — did rep ask 'What's got you thinking about selling?'" }},
+      "situation": {{ "covered": true | false, "feedback": "string — did rep ask 'What's got you thinking about selling?' For Foreclosure: did they ask all three situation questions (bank letters duration, sale date mentioned, who they're working with)?" }},
       "impact_1": {{ "covered": true | false, "feedback": "string — first Impact question used" }},
       "impact_2": {{ "covered": true | false, "feedback": "string — second Impact question used" }},
       "impact_3": {{ "covered": true | false, "feedback": "string — third Impact question used" }},
       "perfect_picture": {{ "covered": true | false, "feedback": "string — did rep ask the Picture Perfect/Goal question?" }}
     }},
+
+    "foreclosure_pivot": {{
+      "applicable": true | false,
+      "applicable_note": "string — only applicable when script_used='Foreclosure Process Script'. If standard script, set applicable=false and a brief note.",
+      "explained_4_routes": {{ "covered": true | false, "feedback": "string — did rep walk through all 4 routes (Reinstate, Short Sale, Bankruptcy, Sell)?" }},
+      "reinstate_probing": {{ "covered": true | false, "feedback": "string — did rep ask the 3 reinstate questions (arrears amount, access to funds, what if no funds)?" }},
+      "short_sale_qualifying": {{ "covered": true | false, "feedback": "string — did rep correctly list short-sale qualifying situations (death, job loss, medical)?" }},
+      "bankruptcy_credit_warning": {{ "covered": true | false, "feedback": "string — did rep give the 7-year credit warning for bankruptcy?" }},
+      "sell_route_upside": {{ "covered": true | false, "feedback": "string — did rep frame the sell route as 'walk away with cash, fresh start, protect credit'?" }},
+      "asked_which_route": {{ "covered": true | false, "feedback": "string — did rep ask the seller which route they're most interested in?" }},
+      "graceful_redirect_if_non_sell": {{ "covered": true | false, "feedback": "string — if seller picked non-sell, did rep give homework rather than push the sale? (N/A if seller picked Sell.)" }}
+    }},
+
     "property_condition": {{ "covered": true | false, "feedback": "string — number of 16 items covered and any pushback handling" }},
     "road_blocks": {{
       "time": {{ "covered": true | false, "feedback": "string — Timeline asked verbatim with 21-24 day anchor?" }},
@@ -151,7 +165,8 @@ JSON. The schema is:
       "time": {{ "covered": true | false, "feedback": "string — 20-30 min to talk to partners, then 5 min callback?" }},
       "agenda": {{ "covered": true | false, "feedback": "string" }},
       "result": {{ "covered": true | false, "feedback": "string — confident yes/no expected" }},
-      "permission_to_say_no": {{ "covered": true | false, "feedback": "string — 'no is perfectly okay'" }}
+      "permission_to_say_no": {{ "covered": true | false, "feedback": "string — 'no is perfectly okay'" }},
+      "credibility_packet": {{ "covered": true | false, "feedback": "string — ONLY required when script_used='Foreclosure Process Script'. Did rep offer the credibility packet and ask for the seller's email?" }}
     }},
     "notes": "string — short paragraph synthesizing the checklist into 1-2 actionable takeaways"
   }},
@@ -251,6 +266,7 @@ def build_user_prompt(
     is_training: bool = False,
     training_label: Optional[str] = None,
     trainee_email: Optional[str] = None,
+    script_used: str = "Standard Process Script",
 ) -> str:
     """The user message — contains the transcript and deal context.
 
@@ -263,9 +279,22 @@ def build_user_prompt(
                       if training_label else "")
         trainee_line = (f"  Trainee (rep):     {trainee_email}\n"
                         if trainee_email else "")
+        script_line = f"  Script used:       {script_used}\n"
+        # Foreclosure-specific grading guidance
+        if "Foreclosure" in script_used:
+            script_note = (
+                "\nGRADE AGAINST THE FORECLOSURE PROCESS SCRIPT — Section 13 "
+                "of the methodology. In addition to the standard Process "
+                "Call Checklist, populate the `foreclosure_pivot` sub-schema "
+                "checking the Educational Pivot (4 routes), the 3 foreclosure "
+                "situation questions, and the credibility-packet offer at "
+                "the close.\n"
+            )
+        else:
+            script_note = ""
         return f"""CALL TYPE: {call_type}
 TRAINING / ROLE-PLAY: Yes
-{label_line}{trainee_line}
+{label_line}{trainee_line}{script_line}
 DEAL CONTEXT: None — this is a practice role-play call, not a real seller
 call. Grade the rep on methodology adherence, structure, tonality, and
 craft (per the Process Call Checklist and full schema). Do NOT penalize
@@ -275,7 +304,7 @@ how well they executed the call mechanics: TART expectations, UMBC
 qualification flow, motivation discovery with Impact + Picture Perfect
 questions, property condition questioning (if applicable to the
 scenario), road blocks, objection handling, tonality, and non-committal
-language detection.
+language detection.{script_note}
 
 ---
 
@@ -294,9 +323,19 @@ as specified. Do not include any text outside the JSON.
     rec = deal_context.get("recommendation", {}) or {}
     seller = deal_context.get("seller", {}) or {}
 
-    return f"""CALL TYPE: {call_type}
+    if "Foreclosure" in script_used:
+        script_block = (
+            f"SCRIPT USED: {script_used}\n"
+            "GRADE AGAINST THE FORECLOSURE PROCESS SCRIPT — Section 13 of "
+            "the methodology. Populate the `foreclosure_pivot` sub-schema "
+            "checking the Educational Pivot (4 routes), the 3 foreclosure "
+            "situation questions, and the credibility-packet offer.\n\n"
+        )
+    else:
+        script_block = f"SCRIPT USED: {script_used}\n\n"
 
-DEAL CONTEXT:
+    return f"""CALL TYPE: {call_type}
+{script_block}DEAL CONTEXT:
   Address:           {prop.get('address', '—')}
   Location:          {prop.get('city', '')}, {prop.get('state', '')}
   Beds / Baths:      {prop.get('beds', '—')} / {prop.get('baths', '—')}
@@ -337,6 +376,7 @@ def analyze_call(
     is_training: bool = False,
     training_label: Optional[str] = None,
     trainee_email: Optional[str] = None,
+    script_used: str = "Standard Process Script",
 ) -> Dict[str, Any]:
     """Send the transcript to Claude and return the structured analysis.
 
@@ -368,6 +408,7 @@ def analyze_call(
             is_training=is_training,
             training_label=training_label,
             trainee_email=trainee_email,
+            script_used=script_used,
         )
 
         client = _client()
@@ -401,6 +442,7 @@ def analyze_call(
         parsed["_meta"] = {
             "model": MODEL,
             "call_type": call_type,
+            "script_used": script_used,
             "is_training": bool(is_training),
             "training_label": training_label,
             "trainee_email": trainee_email,
@@ -441,7 +483,11 @@ def format_process_call_checklist(analysis: Dict[str, Any]) -> str:
         return ("### Process Call Checklist\n*Not applicable for this call type."
                 + (f" — {note}*" if note else "*"))
 
-    out = ["### Process Call Checklist"]
+    script_used = cl.get("script_used", "Standard Process Script")
+    header = "### Process Call Checklist"
+    if "Foreclosure" in (script_used or ""):
+        header += " — *Foreclosure Process Script*"
+    out = [header]
 
     # Intro
     out.append(_check(cl.get("intro"), "Intro"))
@@ -464,6 +510,28 @@ def format_process_call_checklist(analysis: Dict[str, Any]) -> str:
     out.append(_check(mot.get("impact_3"), "Impact 3"))
     out.append(_check(mot.get("perfect_picture"), "Perfect Picture / Goal"))
 
+    # Foreclosure Pivot (only when applicable)
+    fp = cl.get("foreclosure_pivot", {}) or {}
+    if fp.get("applicable", False):
+        out.append("**Foreclosure Pivot — Educational (4 Routes)**")
+        out.append(_check(fp.get("explained_4_routes"),
+                          "Explained all 4 routes (Reinstate / Short Sale / Bankruptcy / Sell)"))
+        out.append(_check(fp.get("reinstate_probing"),
+                          "Reinstate probing (arrears amount / access to funds / what if no funds)"))
+        out.append(_check(fp.get("short_sale_qualifying"),
+                          "Short-sale qualifying (death / job loss / medical)"))
+        out.append(_check(fp.get("bankruptcy_credit_warning"),
+                          "Bankruptcy 7-year credit warning"))
+        out.append(_check(fp.get("sell_route_upside"),
+                          "Sell route upside (cash, fresh start, protect credit)"))
+        out.append(_check(fp.get("asked_which_route"),
+                          "Asked which route seller is most interested in"))
+        out.append(_check(fp.get("graceful_redirect_if_non_sell"),
+                          "Graceful redirect if seller picked a non-sell route"))
+        note = fp.get("applicable_note", "")
+        if note:
+            out.append(f"  *Note:* {note}")
+
     # Property Condition
     out.append(_check(cl.get("property_condition"), "Property Condition"))
 
@@ -482,6 +550,9 @@ def format_process_call_checklist(analysis: Dict[str, Any]) -> str:
     out.append(_check(se_close.get("agenda"), "Agenda"))
     out.append(_check(se_close.get("result"), "Result"))
     out.append(_check(se_close.get("permission_to_say_no"), "Permission to say No"))
+    if "Foreclosure" in (script_used or ""):
+        out.append(_check(se_close.get("credibility_packet"),
+                          "Credibility packet offered (asked for email)"))
 
     notes = cl.get("notes", "")
     if notes:

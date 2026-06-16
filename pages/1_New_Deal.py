@@ -1164,6 +1164,14 @@ with st.expander(_expander_title, expanded=False):
             help="Which call in the sequence? Affects how the methodology "
                  "evaluates the rep's structure.",
         )
+        script_used = c_type.selectbox(
+            "Script used",
+            ["Standard Process Script", "Foreclosure Process Script"],
+            key="call_script_used",
+            help="Which script the rep was running. The Foreclosure script "
+                 "adds the Educational Pivot (4 routes) and three "
+                 "foreclosure-specific situation questions to the rubric.",
+        )
 
         # Speaker mapping — let the user say who's speaker 0 vs speaker 1
         # AFTER transcription (Deepgram doesn't know which is rep vs seller).
@@ -1229,6 +1237,7 @@ with st.expander(_expander_title, expanded=False):
                         tr.get("labeled_text", ""),
                         deal_context,
                         call_type=call_type,
+                        script_used=script_used,
                     )
 
                 if "error" in analysis:
