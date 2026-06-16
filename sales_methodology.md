@@ -193,6 +193,127 @@ The four components — all four must be present:
 
 **What the AI should check**: Did the rep ask at least one Impact question per pain category mentioned? Did the rep mirror? Did the rep explore multiple motivations? Did the rep get a Picture Perfect answer? Was the tone empathetic (using "I can appreciate" and "I couldn't even imagine") rather than sympathetic ("I'm sorry" / "I understand")?
 
+### 5.4.1 Impact Question Bank — Standard Process Script
+
+The single most consistent miss across the team's calls is the Impact question. Reps ask the Situation question well, get a clean motivation answer, and then move straight to property condition — leaving the emotional layer untouched. The Offer Call recap then has no material to work with.
+
+**The rule:** the rep does NOT advance past the Motivation section until at least **two Impact questions plus one Socratic question** have been asked against the surfaced pain category. If a second category surfaces, repeat the cycle. Mirror the seller's own words back to them whenever possible.
+
+**Empathy first, then drill.** Before every Impact question, lead with empathy — "I can appreciate that," "I couldn't even imagine," "That sounds like a lot." Never "I'm sorry" or "I understand." Lower, slower tone on emotional content.
+
+Pick from the bank below based on the category the seller revealed.
+
+**Category 1 — Financial Pain** (behind on payments, two mortgages, repair bills, lien, child support, medical debt)
+
+- *Impact:* "How long have you been carrying this financial weight on your shoulders?"
+- *Impact:* "What's that been costing you each month — not just in dollars, but in stress?"
+- *Impact:* "When you wake up at 3 a.m. thinking about money, is this property a part of that?"
+- *Impact:* "Is this affecting other bills, other parts of your life right now?"
+- *Impact:* "How long can you realistically keep carrying this before something has to give?"
+- *Socratic:* "What would change for you if this payment was completely off your plate next month?"
+- *Socratic:* "What's the cost of NOT taking action here — sitting in this for another six months?"
+- *Socratic:* "If we could get this closed quickly, what's the first bill you'd take care of with that money?"
+
+**Category 2 — Emotional Pain** (grief, divorce, breakup, family conflict, loss of a parent/spouse, exhaustion)
+
+- *Impact:* "How long have you been carrying this?"
+- *Impact:* "What has the emotional weight of this been like for you?"
+- *Impact:* "I couldn't even imagine going through that — how have you been holding up?"
+- *Impact:* "Are you grieving the loss of the person, or the loss of what the house represented? Or both?"
+- *Impact:* "Is this property a reminder of something painful every time you think about it?"
+- *Socratic:* "What would it feel like to have this completely behind you?"
+- *Socratic:* "When this is finally resolved — what's the first thing you do for yourself?"
+- *Socratic:* "What would it mean for you to be able to close this chapter and move forward?"
+
+**Category 3 — Relationship Pain** (sibling disagreement, co-owner conflict, divorcing spouse, estranged family member on title)
+
+- *Impact:* "How long have you and [sibling/spouse] been disagreeing about this?"
+- *Impact:* "Has this property put strain on the relationship?"
+- *Impact:* "What does [their name] want from this? Is it the same as what you want?"
+- *Impact:* "Are you the one carrying the burden of trying to bring everyone together on a decision?"
+- *Impact:* "Is the disagreement about price, timing, or something deeper?"
+- *Socratic:* "What would it mean for your relationship with [them] if this was resolved cleanly in 30 days?"
+- *Socratic:* "If we could get everyone on the same page on a number — what does that conversation with [them] look like?"
+
+**Category 4 — Physical Pain** (health issues, mobility, age, stairs, hurricane damage, dangerous condition, exhaustion from repairs)
+
+- *Impact:* "How is your health impacting your ability to stay in this property?"
+- *Impact:* "What things in this house are getting harder for you to manage as time goes on?"
+- *Impact:* "Are repairs piling up faster than you can keep up with them?"
+- *Impact:* "Does the layout or the stairs cause you concern when you think about staying long-term?"
+- *Impact:* "When something breaks, who handles it? Is that becoming a problem?"
+- *Socratic:* "What would it feel like to be in a place that actually fits where you are in your life right now?"
+- *Socratic:* "If you didn't have to worry about the maintenance anymore, what could you focus on instead?"
+
+**Category 5 — Mental Pain** (overwhelm, can't sleep, decision fatigue, anxiety about the future, paralysis)
+
+- *Impact:* "How much mental energy is this property consuming on a daily basis?"
+- *Impact:* "Are you losing sleep over this?"
+- *Impact:* "On a scale of 1 to 10, how much is this weighing on you right now?"
+- *Impact:* "Is this property keeping you from being present in other areas of your life — work, family, kids?"
+- *Impact:* "When was the last day you didn't think about this property even once?"
+- *Socratic:* "What would your headspace look like in the next 30 days if this was completely resolved?"
+- *Socratic:* "What would you do with the mental energy you'd get back?"
+
+**Category 6 — Time Pain** (tired landlord, distance management, vacancy losses, full-time job + property, going back and forth)
+
+- *Impact:* "How often do you have to drop what you're doing to deal with this property?"
+- *Impact:* "How is managing this affecting your day job / business / family time?"
+- *Impact:* "How long does the round trip take you every time you have to go out there?"
+- *Impact:* "What does that cost you in your business / your weekend / your relationship?"
+- *Impact:* "How long have you been thinking 'I just don't want to do this anymore'?"
+- *Socratic:* "What would you do with your weekends if you weren't managing this property?"
+- *Socratic:* "What would it mean for your business if this was completely off your plate next month?"
+
+**Category 7 — Goal-Blocking Pain** (can't buy next home, can't retire, can't move to grandkids, kids' college funded, business expansion blocked)
+
+- *Impact:* "How long have you been waiting to make that move?"
+- *Impact:* "What's the cost of putting that life on hold while this property sits?"
+- *Impact:* "Is there a window or a deadline you're working against — like a school year, a job start date, a grandchild on the way?"
+- *Impact:* "Have you missed anything important — a graduation, a birthday — because this property has had you stuck?"
+- *Impact:* "What would have already happened in your life by now if this property had been off your plate a year ago?"
+- *Socratic:* "If we close this in 30 days, what do you get to do next that you can't do today?"
+- *Socratic:* "What does life look like six months from now if this gets resolved this month?"
+
+**Category 8 — Extreme Pleasure Pain** (something amazing waiting on the other side — cruise with mom, dream home, retirement, new business)
+
+- *Impact:* "Tell me more about that — what does that mean to you?"
+- *Impact:* "How long have you been dreaming about doing that?"
+- *Impact:* "Is there a window on this — like, does it have to happen this year for it to matter?"
+- *Impact:* "Who else is this exciting for besides you?"
+- *Impact:* "What would it mean to actually pull this off?"
+- *Socratic:* "When that day actually arrives — you on the cruise / in the new house / handing your daughter that check — what does that moment look like?"
+- *Socratic:* "What would you regret if this didn't happen?"
+
+**Category 9 — No Motivation / Price-Only** (seller says "I'm not really thinking about selling, but if the price is right...")
+
+- These sellers need OPPORTUNITY-COST Impact questions, not pain ones:
+- *Impact:* "What's the cost of NOT exploring this — sitting on the property another year?"
+- *Impact:* "Is this property doing anything for you right now — appreciating, generating rent, or just sitting?"
+- *Impact:* "Is there anything else you'd rather be doing with the money this property represents?"
+- *Impact:* "What would need to be true for this to become important to you?"
+- *Socratic:* "Is there anything this property is keeping you from doing in your life that you don't realize?"
+- *Socratic:* "If we did come to an agreement on a number that worked for you — what would you do with the proceeds?"
+
+**Category 10 — Toward-Pleasure-Only** (just wants to move, downsize, simplify — no real pain, just a forward goal)
+
+- Get excited WITH them. Curiosity, not pain-drilling:
+- *Impact:* "That's exciting — where are you headed?"
+- *Impact:* "How long have you been planning this move?"
+- *Impact:* "What does life look like once you're settled there — what are you most excited about?"
+- *Impact:* "Who's going to be there with you — kids, grandkids, friends?"
+- *Impact:* "What's the one thing you're most looking forward to about the next chapter?"
+- *Socratic:* "What would this next chapter look like six months in — paint me that picture."
+- *Socratic:* "What's keeping you from being there already?"
+
+**Common-mistake checklist for reps:**
+
+1. Asking ONLY "How long have you been thinking about it?" — that's a *timeline* question, not an Impact question. Ask it AFTER an Impact question.
+2. Accepting the seller's first surface answer ("I'm tired") and moving on without drilling — "Tired of what specifically? How tired? How long?"
+3. Treating Picture Perfect as a question that just needs to be ASKED. The job is to get a real answer. If the seller deflects ("you give me the money, you get the property"), redirect: "I love that — and once you have that money and this property is off your plate, what does the next chapter actually look like for you?"
+4. Saying "I understand" or "I totally relate" instead of "I can appreciate that" or "I couldn't even imagine."
+5. Moving at condition-question pace through emotional disclosures. SLOW DOWN. Let the weight of the moment breathe.
+
 ### 5.5 Property Condition Questions
 
 The rep should cover all 16 standard items. If a seller pushes back with "you can find that online," the rep should answer: "Normally that's right, but public records sometimes have incorrect or outdated information, and they don't say anything about the age of the roof, the furnace, AC, things like that — which is why it's important I get that information so we can let you know a much more accurate number your property qualifies for. So when you say the windows were updated…"
@@ -662,6 +783,76 @@ After Set Expectations, the rep asks foreclosure-specific situation questions be
 These uncover the timeline urgency (close to auction vs. still early) and any existing mitigation efforts (an attorney, a HUD counselor, a forbearance application in progress). The rep mirrors and shows empathy throughout — "Yeah, I totally get that," "Makes sense," "You're not alone." Then Socratic / Impact questions follow as normal.
 
 **What the AI should check:** Did the rep ask all THREE foreclosure-specific situation questions? Did they ask in the right order (before Impact questions)? Did they use empathy phrases like "you're not alone" / "I totally get that" without ever using sympathy phrases like "I'm sorry"?
+
+### 13.2.1 Impact Question Bank — Foreclosure Process Script
+
+Foreclosure sellers are carrying a particular combination of fear, shame, and exhaustion. The Standard Impact bank in §5.4.1 applies — but foreclosure adds layers (sale-date anxiety, credit damage, family stress, predatory-rescue burnout) that warrant their own questions. Use these AFTER the three foreclosure situation questions (bank letters / sale date / who they're working with), and BEFORE the Educational Pivot.
+
+**The rule:** Ask at least **two Impact questions and one Socratic question** drawing from this bank before walking through the 4 routes. Empathy comes first on every question. Mirror their exact words back to them. Lower, slower, softer tone — these sellers are exhausted and skeptical.
+
+**Layer 1 — Sale-Date Pressure & Sleep**
+
+- *Impact:* "How long have you been getting those letters before you finally picked up the phone?"
+- *Impact:* "When you look at that sale date on the calendar, what does that feel like?"
+- *Impact:* "Are you sleeping through the night, or is this keeping you up?"
+- *Impact:* "What's your biggest fear about what happens if [sale date] comes and goes?"
+- *Impact:* "When you imagine the day a sheriff knocks on the door — what runs through your head?"
+- *Socratic:* "What would it feel like to wake up tomorrow and know that date on the calendar no longer applied to you?"
+- *Socratic:* "What's the cost of waiting another 30 days to make a decision here?"
+
+**Layer 2 — Financial Spiral & Debt Stack**
+
+- *Impact:* "How far behind are you on the mortgage right now — and is anything else stacking on top of that?"
+- *Impact:* "Are you robbing one bill to pay another at this point?"
+- *Impact:* "Is the bank calling on top of other collectors? How many calls a day are you getting?"
+- *Impact:* "Have you been pulling from savings, retirement, or family to try to hold this off?"
+- *Impact:* "How much of the equity has the legal fight and the missed payments already eaten?"
+- *Socratic:* "What would change for you tomorrow if all of those calls stopped?"
+- *Socratic:* "What would it mean to start over without this debt following you?"
+
+**Layer 3 — Credit & The 7-Year Shadow**
+
+- *Impact:* "Have you thought about what a foreclosure on your record does to the next seven years of your life?"
+- *Impact:* "Are there any major purchases coming up — a car, a refinance, helping a kid co-sign — that this would block?"
+- *Impact:* "What was your credit like before all this started? Are you watching it tank in real time?"
+- *Impact:* "Have you tried to rent somewhere else yet? What did the landlord say when they pulled your credit?"
+- *Socratic:* "What would it mean for you to protect your credit through this rather than have it destroyed?"
+- *Socratic:* "Where do you want to be living in 12 months, and what does the credit damage do to that picture?"
+
+**Layer 4 — Family & Relationship Strain**
+
+- *Impact:* "Who else is going through this with you right now?"
+- *Impact:* "Have you been able to talk to your [spouse/kids/parents] about it, or have you been carrying this alone?"
+- *Impact:* "What has this done to the household — to your marriage, to the way you sit around the dinner table?"
+- *Impact:* "Are the kids old enough to know what's going on? How is that landing for them?"
+- *Impact:* "Have you had to ask family for money yet? How did that conversation go?"
+- *Socratic:* "What would it mean for your family to have this fear lifted off the dinner table?"
+- *Socratic:* "Who's the first person you call when this is finally resolved?"
+
+**Layer 5 — Shame, Identity & Burnout from Rescue Calls**
+
+- *Impact:* "How many people have called you trying to 'help' since the notice went public? How is that affecting your trust in this whole process?"
+- *Impact:* "Is there a part of you that feels embarrassed about this — like you shouldn't be in this situation?"
+- *Impact:* "Have you been hiding this from anyone in your life?"
+- *Impact:* "What's the hardest part of all of this for you personally — the money, the uncertainty, the loss of the house, or something else?"
+- *Socratic:* "What would it feel like to stop carrying the shame of this and just have it behind you?"
+- *Socratic:* "Who do you want to be on the other side of this — and what's the first step toward being that person?"
+
+**The Foreclosure Picture Perfect**
+
+After Impact drilling, the Picture Perfect lands very differently on a foreclosure call than a standard call. Use this framing:
+
+> "If you could wake up tomorrow morning and this was completely behind you — no more letters, no more sale date, no more calls — what does that day look like for you? Where are you living? What does your family look like? What's the first thing you do?"
+
+Then SHUT UP and let them paint it. That answer becomes the emotional anchor for the rest of the call, the Educational Pivot, and the Offer Call recap.
+
+**Common-mistake checklist for foreclosure calls:**
+
+1. Going straight from "How long have you been getting letters?" to the 4 routes without ANY Impact drilling. The seller is in fact-gathering mode and you've taught them nothing about themselves.
+2. Saying "I'm sorry you're going through this." Sympathy. Replace with: "I couldn't even imagine carrying this for [X months/years] — you're not alone, and there's a way through this."
+3. Treating the foreclosure timeline as if it were just urgency (it's also fear). Slow down. Don't rush them.
+4. Walking through the 4 routes mechanically. The pivot ONLY works after the seller has felt seen.
+5. Skipping the credibility-packet offer at close. Foreclosure sellers have been burned by predatory calls — the packet is the trust artifact that lets them say yes.
 
 ### 13.3 The Educational Pivot (UNIQUE to the Foreclosure Script)
 
