@@ -67,6 +67,7 @@ _tab_labels = [
     "📐 Strategy Thresholds",
     "💵 Financing & Closing",
     "📊 Comp Settings",
+    "🏢 Title Companies",
     "👥 Allow-List",
     "📦 Export / Import",
 ]
@@ -74,8 +75,9 @@ if IS_ADMIN:
     _tab_labels.append("🛂 Roles")
 
 _tabs = st.tabs(_tab_labels)
-tab_repair, tab_strat, tab_fin, tab_comps, tab_emails, tab_export = _tabs[:6]
-tab_roles = _tabs[6] if IS_ADMIN else None
+(tab_repair, tab_strat, tab_fin, tab_comps, tab_title,
+ tab_emails, tab_export) = _tabs[:7]
+tab_roles = _tabs[7] if IS_ADMIN else None
 
 
 # ============================================================================
@@ -619,7 +621,74 @@ with tab_comps:
 
 
 # ============================================================================
-# TAB 5 — ALLOW-LIST
+# TAB 5 — TITLE COMPANIES (used by Prepare Contract — Escrow Agent block)
+# ============================================================================
+with tab_title:
+    st.markdown("### Title Companies (for the Prepare Contract page)")
+    st.caption(
+        "Companies entered here appear in the **Title Company** dropdown on "
+        "the Prepare Contract page. The name + contact + phone + email + "
+        "address auto-populate the Escrow Agent block of paragraph 2 in the "
+        "Purchase & Sale Agreement when a contract is generated."
+    )
+
+    saved_title = st_settings.get_setting("title_companies") or []
+    if isinstance(saved_title, list) and not saved_title:
+        saved_title = [{"name": "", "contact_name": "", "phone": "",
+                        "email": "", "address": ""}]
+
+    with st.form("title_companies_form"):
+        st.markdown("**One row per title company.** Leave a row blank to remove it.")
+        new_rows = []
+        for i in range(max(len(saved_title), 1) + 1):  # always one extra blank row
+            row = saved_title[i] if i < len(saved_title) else {}
+            st.markdown(f"**Title Company #{i+1}**")
+            c1, c2 = st.columns([2, 2])
+            name = c1.text_input(
+                "Company name", value=row.get("name", ""),
+                key=f"tc_name_{i}",
+                placeholder="e.g. Premier Title & Escrow LLC",
+            )
+            contact = c2.text_input(
+                "Contact name (closer / paralegal)",
+                value=row.get("contact_name", ""), key=f"tc_contact_{i}",
+                placeholder="e.g. Maria Lopez",
+            )
+            c1, c2 = st.columns([1, 2])
+            phone = c1.text_input(
+                "Phone", value=row.get("phone", ""), key=f"tc_phone_{i}",
+                placeholder="(954) 555-7890",
+            )
+            email = c2.text_input(
+                "Email", value=row.get("email", ""), key=f"tc_email_{i}",
+                placeholder="closings@example.com",
+            )
+            address = st.text_input(
+                "Address", value=row.get("address", ""), key=f"tc_address_{i}",
+                placeholder="100 NE 5th St, Fort Lauderdale, FL 33301",
+            )
+            st.markdown("---")
+            # Only keep rows that have at least a name
+            if name.strip():
+                new_rows.append({
+                    "name": name.strip(),
+                    "contact_name": contact.strip(),
+                    "phone": phone.strip(),
+                    "email": email.strip(),
+                    "address": address.strip(),
+                })
+
+        if _save_button("💾 Save Title Companies"):
+            if st_settings.set_setting("title_companies", new_rows,
+                                        updated_by=user["email"]):
+                st.success(f"Saved {len(new_rows)} title companies.")
+                st.rerun()
+            else:
+                st.error("Failed to save. Check Supabase logs.")
+
+
+# ============================================================================
+# TAB 6 — ALLOW-LIST
 # ============================================================================
 with tab_emails:
     st.markdown("### Sign-in Allow-List")

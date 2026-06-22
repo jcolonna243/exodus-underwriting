@@ -6,6 +6,7 @@ from modules.db import (list_deals, get_deal, delete_deal, distinct_strategies,
                         load_chat_messages, save_chat_message)
 from modules.memo import build_word_memo, build_pdf_memo
 from modules import chat as chat_mod
+from modules import settings as st_settings
 
 st.set_page_config(page_title="Past Deals", page_icon="📚", layout="wide")
 user = require_login()
@@ -80,8 +81,18 @@ if selected_id > 0:
             for j, (label, value) in enumerate(metrics[i:i + 4]):
                 cols[j].metric(label, value)
 
-        # Action row — Edit / Homeowner / Word / PDF / Delete (5 columns)
-        c_edit, c_home, c_word, c_pdf, c_del = st.columns(5)
+        # Action row — Edit / Homeowner / Contract / Word / PDF / Delete (6 cols)
+        # Prepare Contract is Admin/Manager-only (Agents see a disabled-look
+        # button). The visibility check below replaces the column entirely
+        # for Agents so they don't see a button they can't click.
+        _can_prepare_contract = st_settings.can_view_admin(
+            user.get("email", "") if isinstance(user, dict) else "")
+        if _can_prepare_contract:
+            (c_edit, c_home, c_contract, c_word, c_pdf,
+             c_del) = st.columns(6)
+        else:
+            c_edit, c_home, c_word, c_pdf, c_del = st.columns(5)
+            c_contract = None
 
         # Edit — queue the deal for loading on New Deal page and switch.
         # No RentCast call needed; comps and inputs are restored from JSONB.
@@ -118,6 +129,26 @@ if selected_id > 0:
             except Exception:
                 st.info(
                     "Deal queued. Open the **🏠 Homeowner Presentation** page "
+                    "from the left sidebar."
+                )
+
+        # Prepare Contract (Admin/Manager only)
+        if c_contract is not None and c_contract.button(
+            "📄 Prepare Contract",
+            key=f"contract_btn_{deal['id']}",
+            use_container_width=True,
+            help="Generate a Florida AS-IS Residential Purchase & Sale "
+                 "Agreement PDF for this property. Uses seller party, "
+                 "folio, and legal description from the deal record. Buyer "
+                 "is always NSGC Investing Services, Inc. Lead-Based Paint "
+                 "Disclosure attaches automatically if year built < 1978.",
+        ):
+            st.session_state["contract_deal_id"] = int(deal["id"])
+            try:
+                st.switch_page("pages/7_Prepare_Contract.py")
+            except Exception:
+                st.info(
+                    "Deal queued. Open the **📄 Prepare Contract** page "
                     "from the left sidebar."
                 )
 

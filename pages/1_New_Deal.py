@@ -97,6 +97,13 @@ def _preload_deal(deal_id: int) -> bool:
     st.session_state["garage_spaces"] = int(prop.get("garage_spaces", 0) or 0)
     st.session_state["acquisition_type"] = prop.get("acquisition_type", "Regular")
 
+    # --- 2b. Contract info — Property Tax ID + Legal Description + County
+    # (v23). Used by the Prepare Contract page so the rep doesn't re-type
+    # these every time they generate a contract for the same property.
+    st.session_state["parcel_folio"] = prop.get("parcel_folio", "")
+    st.session_state["legal_description"] = prop.get("legal_description", "")
+    st.session_state["appraiser_county"] = prop.get("county", "")
+
     # --- 3. Rehab toggles ---
     # The rehab dict lives in session_state.rehab and drives the _toggle()
     # helper. We also need to set each widget's individual key because the
@@ -132,6 +139,12 @@ def _preload_deal(deal_id: int) -> bool:
     st.session_state["buyer_demand_confirmed"] = seller.get("buyer_demand_confirmed", False)
     st.session_state["buyer_prefers_dc"] = seller.get("buyer_prefers_dc", False)
     st.session_state["assignable"] = seller.get("assignable", True)
+
+    # --- 4b. Seller party block — v23 contract info ---
+    st.session_state["seller_party_name"] = seller.get("name", "")
+    st.session_state["seller_party_mailing"] = seller.get("mailing_address", "")
+    st.session_state["seller_party_phone"] = seller.get("phone", "")
+    st.session_state["seller_party_email"] = seller.get("email", "")
 
     # --- 5. Comps (CRITICAL — no RentCast re-pull) ---
     saved_comps = inputs.get("comps")
@@ -659,6 +672,120 @@ seller_dict = {
 }
 
 # ============================================================================
+# 4b. CONTRACT INFO — required to generate the Purchase & Sale Agreement.
+# Collapsed by default so it doesn't clutter the underwriting flow; expand
+# when you're ready to prepare a contract. Saves with the deal.
+# ============================================================================
+with st.expander("📄 Contract Info (seller party, folio, legal description)",
+                 expanded=False):
+    st.caption("These fields are saved with the deal and auto-populate the "
+               "Purchase & Sale Agreement when you click **Prepare Contract**. "
+               "You only need to enter them once per property.")
+
+    st.markdown("**Seller Party** — exactly as it should appear in the contract")
+    c1, c2 = st.columns([2, 1])
+    seller_name = c1.text_input(
+        "Seller Name (full legal name)", key="seller_party_name",
+        placeholder='e.g. "John Q. Sample, an unmarried man" or "Estate of …"',
+    )
+    seller_phone = c2.text_input(
+        "Seller Phone", key="seller_party_phone",
+        placeholder="(305) 555-1234",
+    )
+    c1, c2 = st.columns([2, 1])
+    seller_mailing = c1.text_input(
+        "Seller Mailing Address (for notices)", key="seller_party_mailing",
+        placeholder="123 Main St, City, FL 33101",
+    )
+    seller_email = c2.text_input(
+        "Seller Email", key="seller_party_email",
+        placeholder="seller@example.com",
+    )
+
+    st.markdown("**Property Tax ID & Legal Description** — from the county "
+                "property appraiser")
+    c1, c2 = st.columns([1, 2])
+    parcel_folio = c1.text_input(
+        "Property Tax ID / Folio #", key="parcel_folio",
+        placeholder="01-2345-678-9012",
+    )
+
+    # County appraiser quick-link — opens the right county's search page so
+    # the user can copy the folio and legal description without leaving the
+    # context of the deal.
+    _county = (city if False else "").strip()  # placeholder; will use prop county
+    _county_links = {
+        "Miami-Dade": "https://www.miamidade.gov/Apps/PA/PAOnlineTools/Property/PropertySearch",
+        "Broward":    "https://web.bcpa.net/bcpaclient/#/Record-Search",
+        "Palm Beach": "https://www.pbcpao.gov/Property/Search",
+        "Hillsborough": "https://gis.hcpafl.org/propertysearch/",
+        "Pinellas":   "https://www.pcpao.gov/quick-search",
+        "Lee":        "https://www.leepa.org/Search/PropertySearch.aspx",
+    }
+    # Heuristic: pick a county from city. Rough mapping for common cities.
+    _city_to_county = {
+        "miami": "Miami-Dade", "hialeah": "Miami-Dade", "opa-locka": "Miami-Dade",
+        "homestead": "Miami-Dade", "miami beach": "Miami-Dade",
+        "fort lauderdale": "Broward", "pompano beach": "Broward",
+        "oakland park": "Broward", "hollywood": "Broward",
+        "west palm beach": "Palm Beach", "riviera beach": "Palm Beach",
+        "boca raton": "Palm Beach", "lake worth": "Palm Beach",
+        "tampa": "Hillsborough", "brandon": "Hillsborough",
+        "st. petersburg": "Pinellas", "clearwater": "Pinellas",
+        "fort myers": "Lee", "north fort myers": "Lee", "cape coral": "Lee",
+    }
+    _guessed = _city_to_county.get((city or "").strip().lower(), "")
+    appraiser_county = c2.selectbox(
+        "County (for appraiser lookup link)",
+        ["", "Miami-Dade", "Broward", "Palm Beach", "Hillsborough",
+         "Pinellas", "Lee", "Other"],
+        index=(["", "Miami-Dade", "Broward", "Palm Beach", "Hillsborough",
+                "Pinellas", "Lee", "Other"].index(_guessed) if _guessed else 0),
+        key="appraiser_county",
+        help="Pick the county the property is in. Used both for the appraiser "
+             "look-up link below AND printed on the contract's Property Description.",
+    )
+
+    if appraiser_county and appraiser_county != "Other":
+        _link = _county_links.get(appraiser_county)
+        if _link:
+            st.link_button(
+                f"🔗 Open {appraiser_county} Property Appraiser",
+                _link, help="Opens in a new tab. Search by address, then copy "
+                            "the Folio # and Legal Description fields back into "
+                            "the boxes here.",
+            )
+    elif appraiser_county == "Other":
+        _q = ", ".join(filter(None, [address, city, state])) or "Florida property appraiser"
+        st.link_button(
+            "🔗 Google county property appraiser",
+            f"https://www.google.com/search?q={_q}+property+appraiser+folio+legal+description",
+            help="Opens a Google search. Find your county's appraiser site, "
+                 "look up this property, then copy the folio and legal description here.",
+        )
+
+    legal_description = st.text_area(
+        "Legal Description", key="legal_description",
+        height=80,
+        placeholder='e.g. "LOT 12, BLOCK 5, SUNNYDALE ESTATES, ACCORDING TO '
+                    'THE PLAT THEREOF AS RECORDED IN PLAT BOOK 42, PAGE 17 '
+                    'OF THE PUBLIC RECORDS OF MIAMI-DADE COUNTY, FLORIDA"',
+        help="Copy verbatim from the county appraiser. This text prints into "
+             "Paragraph 1(c) of the contract — it's worth being exact.",
+    )
+
+# Extend the property + seller dicts with the new contract-info fields so
+# they round-trip with the deal record. Both contract.py and the
+# Prepare Contract page read from these.
+property_dict["county"] = appraiser_county or ""
+property_dict["parcel_folio"] = parcel_folio or ""
+property_dict["legal_description"] = legal_description or ""
+seller_dict["name"] = seller_name or ""
+seller_dict["mailing_address"] = seller_mailing or ""
+seller_dict["phone"] = seller_phone or ""
+seller_dict["email"] = seller_email or ""
+
+# ============================================================================
 # 5. NOVATION PARAMETERS (collapsible)
 # ============================================================================
 with st.expander("⚙️ Advanced: Novation parameters (tunable)"):
@@ -1028,6 +1155,39 @@ else:
     st.caption(
         "💡 Save this deal first to unlock the **🏠 Show to Homeowner** view "
         "— a clean kitchen-table breakdown of how we arrived at the offer."
+    )
+
+# Prepare Contract — only available after save AND only visible to
+# Admin/Manager (Agents can't generate contracts).
+_contract_deal_id = st.session_state.get("loaded_deal_id")
+try:
+    from modules import settings as _st_sett
+    _can_prepare_contract = _st_sett.can_view_admin(user.get("email", ""))
+except Exception:
+    _can_prepare_contract = False
+
+if _contract_deal_id and _can_prepare_contract:
+    if st.button(
+        "📄 Prepare Contract",
+        use_container_width=True,
+        help="Generate a Florida AS-IS Residential Purchase & Sale Agreement "
+             "PDF for this property. Pre-fills seller party, property folio, "
+             "and legal description from the deal record. Buyer is always "
+             "NSGC Investing Services, Inc. Lead-Based Paint Disclosure "
+             "attaches automatically when year built is pre-1978.",
+    ):
+        st.session_state["contract_deal_id"] = int(_contract_deal_id)
+        try:
+            st.switch_page("pages/7_Prepare_Contract.py")
+        except Exception:
+            st.info(
+                "Deal queued. Open the **📄 Prepare Contract** page "
+                "from the left sidebar."
+            )
+elif _can_prepare_contract:
+    st.caption(
+        "💡 Save this deal first to unlock the **📄 Prepare Contract** "
+        "PDF generator."
     )
 
 # ============================================================================
