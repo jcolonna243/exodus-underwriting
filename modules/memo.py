@@ -156,20 +156,51 @@ def build_word_memo(prop: Dict, rec: Dict, seller: Dict, rehab_items: List = Non
             rehab = rec.get("rehab_total", 0)
             holding = rec.get("total_holding", 0)
             com = rec.get("cost_of_money", 0)
+            # v24 itemized closing breakdowns (fall back to single line if absent)
+            ab_items = (rec.get("ab_closing_itemized") or {}).get("line_items", [])
+            bc_items = (rec.get("bc_closing_itemized") or {}).get("line_items", [])
+            bc_comm_note = (rec.get("bc_closing_itemized") or {}).get(
+                "commission_note", "")
+            household_adj_net = rec.get("net_profit_household_adjusted")
+            listing_recoverable = rec.get("commission_listing_recoverable", 0)
             # Net Acquisition+Project Cost = TPC minus BC (BC is shown on sale side)
             net_acq_cost = purchase_price + ab_closing + rehab + holding + com
             net_sale_proceeds = arv - bc_closing
+
             proforma_rows = [
                 ("SALE SIDE (B→C)", ""),
                 ("  Expected Sale Price (ARV)", fmt_money(arv)),
-                (f"  Less: BC Closing Costs ({rec.get('sale_closing_pct', 0.07):.1%})",
-                 f"({fmt_money(bc_closing)})"),
+                ("  Less: BC Closing Costs — itemized", ""),
+            ]
+            # Itemized BC breakdown
+            if bc_items:
+                for label, amt in bc_items:
+                    proforma_rows.append(
+                        (f"      {label}", f"({fmt_money(amt)})"))
+                if bc_comm_note:
+                    proforma_rows.append(("      " + bc_comm_note, ""))
+            else:
+                proforma_rows.append(
+                    (f"      BC Closing ({rec.get('sale_closing_pct', 0.07):.1%})",
+                     f"({fmt_money(bc_closing)})"))
+            proforma_rows.extend([
+                ("  Total BC Closing Costs", f"({fmt_money(bc_closing)})"),
                 ("  Net Sale Proceeds", fmt_money(net_sale_proceeds)),
                 ("", ""),
                 ("ACQUISITION & PROJECT (A→B + Hold)", ""),
                 (f"  {purchase_label}", fmt_money(purchase_price)),
-                (f"  Plus: AB Closing Costs ({rec.get('purchase_closing_pct', 0.04):.1%})",
-                 fmt_money(ab_closing)),
+                ("  Plus: AB Closing Costs — itemized", ""),
+            ])
+            # Itemized AB breakdown
+            if ab_items:
+                for label, amt in ab_items:
+                    proforma_rows.append((f"      {label}", fmt_money(amt)))
+            else:
+                proforma_rows.append(
+                    (f"      AB Closing ({rec.get('purchase_closing_pct', 0.04):.1%})",
+                     fmt_money(ab_closing)))
+            proforma_rows.extend([
+                ("  Total AB Closing Costs", fmt_money(ab_closing)),
                 ("  Plus: Total Rehab", fmt_money(rehab)),
                 (f"  Plus: Holding Costs ({rec.get('loan_duration_months', 6)} mo × "
                  f"{fmt_money(monthly_holding_total)}/mo)",
@@ -183,10 +214,21 @@ def build_word_memo(prop: Dict, rec: Dict, seller: Dict, rehab_items: List = Non
                 ("  Total Acquisition + Project Cost", fmt_money(net_acq_cost)),
                 ("", ""),
                 ("BOTTOM LINE", ""),
-                ("  Net Sale Proceeds − Total Cost = Net Profit",
+                ("  Net Sale Proceeds − Total Cost = Net Profit (LLC view)",
                  fmt_money(rec.get("net_profit", 0))),
                 ("  Projected ROI", fmt_pct(rec.get("roi", 0))),
-            ]
+            ])
+            # Household-adjusted view — only meaningful if listing commission > 0
+            if listing_recoverable and listing_recoverable > 0 and household_adj_net is not None:
+                proforma_rows.extend([
+                    ("", ""),
+                    ("  * Household-Adjusted Net (adds listing agent commission back)",
+                     fmt_money(household_adj_net)),
+                    (f"    Listing commission of {fmt_money(listing_recoverable)} "
+                     "is paid to a licensed family member and effectively "
+                     "returns to the household. Still counted as a deal cost "
+                     "for conservative underwriting.", ""),
+                ])
         elif rec.get("proforma_kind") == "assignment":
             # Wholesale Assignment — we never close, profit = the fee
             proforma_rows = [
@@ -487,19 +529,54 @@ def build_pdf_memo(prop: Dict, rec: Dict, seller: Dict, rehab_items: List = None
             rehab = rec.get("rehab_total", 0)
             holding = rec.get("total_holding", 0)
             com = rec.get("cost_of_money", 0)
+            # v24 itemized closing breakdowns
+            ab_items = (rec.get("ab_closing_itemized") or {}).get("line_items", [])
+            bc_items = (rec.get("bc_closing_itemized") or {}).get("line_items", [])
+            bc_comm_note = (rec.get("bc_closing_itemized") or {}).get(
+                "commission_note", "")
+            household_adj_net = rec.get("net_profit_household_adjusted")
+            listing_recoverable = rec.get("commission_listing_recoverable", 0)
             # Net Acquisition+Project Cost excludes BC (BC is on sale side)
             net_acq_cost = purchase_price + ab_closing + rehab + holding + com
             net_sale_proceeds = arv - bc_closing
             proforma_rows = [
                 ("<b>SALE SIDE (B→C)</b>", ""),
                 ("&nbsp;&nbsp;Expected Sale Price (ARV)", fmt_money(arv)),
-                (f"&nbsp;&nbsp;Less: BC Closing Costs ({rec.get('sale_closing_pct', 0.07):.1%})",
-                 f"({fmt_money(bc_closing)})"),
+                ("&nbsp;&nbsp;<i>Less: BC Closing Costs — itemized</i>", ""),
+            ]
+            if bc_items:
+                for label, amt in bc_items:
+                    proforma_rows.append(
+                        (f"&nbsp;&nbsp;&nbsp;&nbsp;{label}",
+                         f"({fmt_money(amt)})"))
+                if bc_comm_note:
+                    proforma_rows.append(
+                        (f"&nbsp;&nbsp;&nbsp;&nbsp;<i>{bc_comm_note}</i>", ""))
+            else:
+                proforma_rows.append(
+                    (f"&nbsp;&nbsp;&nbsp;&nbsp;BC Closing "
+                     f"({rec.get('sale_closing_pct', 0.07):.1%})",
+                     f"({fmt_money(bc_closing)})"))
+            proforma_rows.extend([
+                ("&nbsp;&nbsp;<b>Total BC Closing Costs</b>",
+                 f"<b>({fmt_money(bc_closing)})</b>"),
                 ("&nbsp;&nbsp;Net Sale Proceeds", fmt_money(net_sale_proceeds)),
                 ("<b>ACQUISITION &amp; PROJECT (A→B + Hold)</b>", ""),
                 (f"&nbsp;&nbsp;{purchase_label}", fmt_money(purchase_price)),
-                (f"&nbsp;&nbsp;Plus: AB Closing Costs ({rec.get('purchase_closing_pct', 0.04):.1%})",
-                 fmt_money(ab_closing)),
+                ("&nbsp;&nbsp;<i>Plus: AB Closing Costs — itemized</i>", ""),
+            ])
+            if ab_items:
+                for label, amt in ab_items:
+                    proforma_rows.append(
+                        (f"&nbsp;&nbsp;&nbsp;&nbsp;{label}", fmt_money(amt)))
+            else:
+                proforma_rows.append(
+                    (f"&nbsp;&nbsp;&nbsp;&nbsp;AB Closing "
+                     f"({rec.get('purchase_closing_pct', 0.04):.1%})",
+                     fmt_money(ab_closing)))
+            proforma_rows.extend([
+                ("&nbsp;&nbsp;<b>Total AB Closing Costs</b>",
+                 f"<b>{fmt_money(ab_closing)}</b>"),
                 ("&nbsp;&nbsp;Plus: Total Rehab", fmt_money(rehab)),
                 (f"&nbsp;&nbsp;Plus: Holding Costs ({rec.get('loan_duration_months', 6)} mo × "
                  f"{fmt_money(rec.get('monthly_holding', 0))}/mo)",
@@ -514,10 +591,20 @@ def build_pdf_memo(prop: Dict, rec: Dict, seller: Dict, rehab_items: List = None
                  fmt_money(net_acq_cost)),
                 ("<b>BOTTOM LINE</b>", ""),
                 ("&nbsp;&nbsp;Net Sale Proceeds − Total Cost", ""),
-                ("&nbsp;&nbsp;<b>Net Profit</b>",
+                ("&nbsp;&nbsp;<b>Net Profit (LLC view)</b>",
                  f"<b>{fmt_money(rec.get('net_profit', 0))}</b>"),
                 ("&nbsp;&nbsp;Projected ROI", fmt_pct(rec.get("roi", 0))),
-            ]
+            ])
+            # Household-adjusted view
+            if listing_recoverable and listing_recoverable > 0 and household_adj_net is not None:
+                proforma_rows.extend([
+                    ("&nbsp;&nbsp;* <b>Household-Adjusted Net</b> (listing commission added back)",
+                     f"<b>{fmt_money(household_adj_net)}</b>"),
+                    (f"&nbsp;&nbsp;&nbsp;&nbsp;<i>Listing commission "
+                     f"{fmt_money(listing_recoverable)} is paid to a licensed "
+                     "family member and returns to the household. Still counted "
+                     "as a deal cost for conservative LLC underwriting.</i>", ""),
+                ])
         elif rec.get("proforma_kind") == "assignment":
             proforma_rows = [
                 ("<b>STRATEGY</b>", "Assignment — no closings, no rehab on our side"),

@@ -40,13 +40,51 @@ DEFAULTS = {
     "points": 0.015,
     "purchase_closing_pct": 0.04,
     "sale_closing_pct": 0.07,
-    # Strategy-specific closing percentages (AB = our side at purchase,
-    # BC = our side at sale)
+    # Legacy strategy-specific closing percentages — kept for backward compat
+    # and used as FALLBACKS if the v24 itemized model is disabled. New code
+    # should use the ab_baseline_flat / bc_baseline_flat / etc. keys below.
     "regular_ab_pct": 0.04,               # Standard purchase, financed
     "short_sale_ab_pct": 0.02,            # Bank covers seller's portion
     "dc_ab_pct": 0.04,                    # Includes ~1% transactional funding
     "rehab_bc_pct": 0.07,                 # FL retail: 5.5% comm + 0.7% doc stamps + misc
     "dc_bc_pct": 0.02,                    # No commission, just doc stamps + closing
+
+    # ---- v24 itemized closing cost model ---------------------------------
+    # Built from analysis of 7 real AB HUDs and 6 real BC HUDs (2024–2025).
+    # Fixed baseline captures the always-charged flat fees; loan_pct/comm_pct/etc.
+    # capture the % components; situational items get added on the deal form.
+    #
+    # AB (buyer / acquisition):
+    "ab_baseline_flat": 4750,             # Attorney $1,250 + Tax Service $999 + Settlement $850
+                                           #  + ALTA 8.1 $100 + Lender's Title $700 + Recording
+                                           #  $400 + Courier/Scanning/Notary ~$450 = ~$4,750
+    "ab_loan_pct": 0.0270,                # 1.75% points + 0.35% mortgage doc stamps
+                                           #  + 0.20% intangible + 0.40% prepaid interest
+                                           #  = 2.70% of the LOAN amount (not purchase)
+    # AB when we're absorbing the seller's typical closing items (equity deals
+    # where we sweetened the offer by paying their side):
+    "seller_closings_pickup_flat": 700,   # Title search + municipal lien search
+    "hoa_estoppel_fee": 500,              # When property is in an HOA
+    # Short sale:
+    "short_sale_negotiation_fee": 4000,   # Flat coordinator/negotiator fee per SS
+    # BC (seller / disposition):
+    "bc_baseline_flat": 3000,             # Attorney $1,250 + Settlement $600–$975
+                                           #  + Title Search $200 + Lien Search $450
+                                           #  + Wire/Courier/Admin ~$150 = ~$3,000
+    "bc_commission_pct": 0.055,           # Realtor commission — 5.0–6.0% range,
+                                           #  5.5% default; UI can override per deal
+    "bc_commission_listing_share": 0.5,   # Half of commission is listing side,
+                                           #  which is internally recoverable (family
+                                           #  member is licensed listing agent).
+                                           #  Reported as expense with an asterisk.
+    "bc_doc_stamp_pct": 0.007,            # 0.70% of sale price — FL statutory
+    "bc_owner_title_pct_seller_pays": 0.004,  # 0.40% of sale — only in seller-pays
+                                                #  counties. In buyer-pays counties this
+                                                #  drops to 0 (buyer absorbs it).
+    # Which FL counties customarily have the BUYER pay the owner's title policy.
+    # In these counties, we (seller at BC) don't pay it; in all other counties
+    # we do. Verified across the 6 BC closings.
+    "buyer_pays_owner_title_counties": ["Broward", "Miami-Dade", "Sarasota", "Collier"],
     # Insurance (lender-required, scales with loan)
     "insurance_per_100k_monthly": 244,    # $244/mo per $100k of loan
     "insurance_bracket": 25_000,          # round loan to this for insurance calc
@@ -581,8 +619,8 @@ def monthly_holding(loan: float = 0, pool: bool = False, hoa: float = 0,
 def cash_mao_ltc(
     arv: float,
     rehab_total: float,
-    bc_pct: float,            # disposition-specific sale closing %
-    ab_pct: float,            # acquisition-specific purchase closing %
+    bc_pct: float,            # disposition-specific sale closing % (of ARV)
+    ab_pct: float,            # acquisition-specific purchase closing % (of purchase)
     holding_total: float,
     target_roi: float,
     ltc: float,
@@ -591,22 +629,37 @@ def cash_mao_ltc(
     origination_pct: float,
     interest_rate: float,
     months: float,
+    ab_flat: float = 0.0,     # v24: fixed AB $ (baseline + situational)
+    bc_flat: float = 0.0,     # v24: fixed BC $ (baseline + situational)
+    ab_pct_of_loan: float = 0.0,  # v24: AB fees that scale with LOAN, not purchase
 ) -> float:
     """Max purchase price such that target ROI is achieved.
 
     Loan = min(ltc × P, arv_cap × ARV). Two analytic cases:
       Case 1 (cap doesn't bind): loan = ltc × P, COM grows with P
       Case 2 (cap binds):        loan = arv_cap × ARV, COM is fixed
+
+    v24: `ab_flat` and `bc_flat` add fixed dollars to the AB/BC side, and
+    `ab_pct_of_loan` adds a % that scales with the LOAN (not purchase). This
+    lets the itemized closing model (v24) flow into the MAO math without
+    changing the closed-form algebra:
+
+      Case 1 total cost = P × (1 + ab_pct + ab_pct_of_loan × ltc + k)
+                        + ab_flat + bc_flat + rehab + arv×bc_pct
+                        + holding + origination_flat
     """
     if arv <= 0:
         return 0
-    bc_costs = arv * bc_pct
+    bc_costs = arv * bc_pct + bc_flat
     target_tpc = arv / (1 + target_roi)
     loan_cost_factor = origination_pct + interest_rate * (months / 12.0)
-    k = ltc * loan_cost_factor
+    # k combines COM and the v24 AB-of-loan factor. Both scale with LOAN,
+    # which in Case 1 = ltc × P — so they both roll into the same denominator.
+    k = ltc * (loan_cost_factor + ab_pct_of_loan)
 
     # --- Case 1: loan = ltc × P ---
-    numer1 = target_tpc - rehab_total - bc_costs - holding_total - origination_flat
+    numer1 = (target_tpc - rehab_total - bc_costs - holding_total
+              - origination_flat - ab_flat)
     denom1 = 1 + ab_pct + k
     p_case1 = numer1 / denom1 if denom1 > 0 else 0
 
@@ -620,7 +673,10 @@ def cash_mao_ltc(
     capped_loan = arv_cap * arv
     com_fixed = compute_com(capped_loan, origination_flat, origination_pct,
                             interest_rate, months)
-    numer2 = target_tpc - rehab_total - bc_costs - holding_total - com_fixed
+    # v24: AB-of-loan is also fixed in Case 2 (loan is capped)
+    ab_loan_fixed = capped_loan * ab_pct_of_loan
+    numer2 = (target_tpc - rehab_total - bc_costs - holding_total
+              - com_fixed - ab_flat - ab_loan_fixed)
     denom2 = 1 + ab_pct
     p_case2 = numer2 / denom2 if denom2 > 0 else 0
     return max(0, p_case2)
@@ -642,10 +698,17 @@ def net_profit_at_price(
     origination_pct: float,
     interest_rate: float,
     months: float,
+    ab_flat: float = 0.0,     # v24: fixed AB $ (baseline + situational)
+    bc_flat: float = 0.0,     # v24: fixed BC $ (baseline + situational)
+    ab_pct_of_loan: float = 0.0,  # v24: AB fees that scale with LOAN
 ) -> tuple:
-    """Returns (net_profit, tpc, roi) using LTC-based COM in dollars."""
-    bc_costs = arv * bc_pct
-    ab_costs = purchase_price * ab_pct
+    """Returns (net_profit, tpc, roi) using LTC-based COM in dollars.
+
+    v24: `ab_flat`, `bc_flat`, `ab_pct_of_loan` support the itemized closing
+    cost model. Defaults are 0 so existing callers still work identically.
+    """
+    bc_costs = arv * bc_pct + bc_flat
+    ab_costs = purchase_price * ab_pct + ab_flat + loan * ab_pct_of_loan
     com = compute_com(loan, origination_flat, origination_pct, interest_rate, months)
     tpc = (purchase_price + ab_costs + rehab_total + bc_costs
            + holding_total + com)
@@ -1254,6 +1317,242 @@ def contract_terms(strategy: str) -> Dict[str, Any]:
 # ============================================================================
 # THE TOP-LEVEL COMPUTE FUNCTION
 # ============================================================================
+# ============================================================================
+# v24 ITEMIZED CLOSING COST MODEL
+# Based on analysis of 7 real AB HUDs + 6 real BC HUDs (2024–2025).
+# The old flat ab_pct / bc_pct model missed 3 real drivers of variance:
+#   1. Loan-based fees (points, doc stamps, intangible, prepaid interest)
+#      scale with LOAN, not purchase price.
+#   2. County convention flips whether we pay owner's title at BC.
+#   3. Situational items (short sale $4K fee, seller concession to FHA
+#      buyer, HOA capital contribution, unpaid liens) show up on real
+#      closings and had no home in the old model.
+# ============================================================================
+
+def _seller_pays_owner_title(county: str, params: Dict[str, Any]) -> bool:
+    """True if the SELLER customarily pays the owner's title policy in this
+    county. At BC that's us (adds a real cost). At AB when buyer_pays_seller_
+    closings is active, we absorb it.
+
+    Broward / Miami-Dade / Sarasota / Collier are BUYER-pays counties, so at
+    BC in those counties we skip this line (the retail buyer picks it up).
+    All other FL counties are seller-pays.
+    """
+    buyer_counties = params.get(
+        "buyer_pays_owner_title_counties",
+        ["Broward", "Miami-Dade", "Sarasota", "Collier"],
+    )
+    county_norm = (county or "").strip()
+    if not county_norm:
+        # Default assumption when county isn't set: seller pays (worst-case for us).
+        return True
+    return county_norm not in buyer_counties
+
+
+def compute_ab_closing(
+    purchase_price: float,
+    loan_amount: float,
+    is_financed: bool,
+    is_short_sale: bool = False,
+    buyer_pays_seller_closings: bool = False,
+    has_hoa: bool = False,
+    county: str = "",
+    short_sale_lien_estimate: float = 0,
+    params: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Compute AB (acquisition) closing costs using the v24 itemized model.
+
+    Args:
+        purchase_price: what we pay the seller
+        loan_amount: hard-money loan on this deal (0 for cash)
+        is_financed: True if using hard money
+        is_short_sale: adds $4K negotiation fee + any lien coverage
+        buyer_pays_seller_closings: True if we sweetened offer by covering
+            seller's title/tax items
+        has_hoa: True if property has an HOA (drives estoppel fee)
+        county: property county — drives owner's title split
+        short_sale_lien_estimate: manual estimate of liens the bank won't cover
+        params: strategy defaults dict (falls back to get_strategy_defaults())
+
+    Returns a dict:
+        baseline: fixed flat baseline ($4,750 default)
+        loan_costs: percentage of loan (0 if cash)
+        seller_closings_pickup: total if buyer_pays_seller_closings
+        short_sale_fees: negotiation fee + lien estimate
+        total: sum of everything above
+        line_items: list of (label, amount) tuples for pro-forma display
+    """
+    p = params or get_strategy_defaults()
+    baseline = p.get("ab_baseline_flat", 4750)
+    loan_pct = p.get("ab_loan_pct", 0.0270)
+    loan_costs = loan_amount * loan_pct if is_financed else 0.0
+
+    # Seller closings pickup — buyer (us) absorbs the seller's typical items.
+    seller_closings_pickup = 0.0
+    seller_closings_items: List[tuple] = []
+    if buyer_pays_seller_closings:
+        # Deed doc stamps — 0.7% of purchase, FL statutory
+        doc_stamp = purchase_price * p.get("bc_doc_stamp_pct", 0.007)
+        seller_closings_items.append(("Deed doc stamps (for seller)", doc_stamp))
+        seller_closings_pickup += doc_stamp
+
+        # Owner's title policy — only if we're in a seller-pays county
+        if _seller_pays_owner_title(county, p):
+            owner_title = purchase_price * p.get("bc_owner_title_pct_seller_pays", 0.004)
+            seller_closings_items.append(("Owner's title policy (for seller)", owner_title))
+            seller_closings_pickup += owner_title
+
+        # Title search + municipal lien search
+        title_admin = p.get("seller_closings_pickup_flat", 700)
+        seller_closings_items.append(("Title search + lien search (for seller)", title_admin))
+        seller_closings_pickup += title_admin
+
+        # HOA estoppel — only if HOA
+        if has_hoa:
+            hoa_estoppel = p.get("hoa_estoppel_fee", 500)
+            seller_closings_items.append(("HOA estoppel (for seller)", hoa_estoppel))
+            seller_closings_pickup += hoa_estoppel
+
+    # Short sale — flat negotiation fee + any lien coverage
+    short_sale_fees = 0.0
+    short_sale_items: List[tuple] = []
+    if is_short_sale:
+        neg_fee = p.get("short_sale_negotiation_fee", 4000)
+        short_sale_items.append(("Short sale negotiation fee", neg_fee))
+        short_sale_fees += neg_fee
+        if short_sale_lien_estimate and short_sale_lien_estimate > 0:
+            short_sale_items.append(
+                ("Est. unpaid liens (bank didn't cover)", short_sale_lien_estimate)
+            )
+            short_sale_fees += short_sale_lien_estimate
+
+    total = baseline + loan_costs + seller_closings_pickup + short_sale_fees
+
+    # Build the display line-items in a stable order
+    line_items = [
+        ("Fixed baseline (attorney, tax service, settlement, endorsements, "
+         "recording, misc)", baseline),
+    ]
+    if is_financed and loan_costs > 0:
+        line_items.append(
+            (f"Loan-related fees ({loan_pct*100:.2f}% of ${loan_amount:,.0f} loan: "
+             "points + mtg doc stamps + intangible + prepaid interest)",
+             loan_costs)
+        )
+    line_items.extend(seller_closings_items)
+    line_items.extend(short_sale_items)
+
+    return {
+        "baseline": baseline,
+        "loan_costs": loan_costs,
+        "seller_closings_pickup": seller_closings_pickup,
+        "short_sale_fees": short_sale_fees,
+        "total": total,
+        "line_items": line_items,
+    }
+
+
+def compute_bc_closing(
+    sale_price: float,
+    county: str = "",
+    seller_concession: float = 0,
+    hoa_capital_contrib: float = 0,
+    utility_escrow: float = 0,
+    commission_pct: Optional[float] = None,
+    params: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Compute BC (disposition/sale) closing costs using the v24 itemized model.
+
+    Args:
+        sale_price: gross price we sell for (usually ARV in the underwriting model)
+        county: property county — drives owner's title split
+        seller_concession: dollar amount we give the retail buyer at closing
+            (common with FHA buyers, $10K–$20K range)
+        hoa_capital_contrib: dollars owed at BC to HOA capital reserves
+        utility_escrow: dollars held back for final utility readings ($250–$1K)
+        commission_pct: override for BC_COMMISSION_PCT (default 5.5%)
+        params: strategy defaults dict
+
+    Returns a dict:
+        baseline: fixed flat baseline ($3,000 default)
+        commissions_total: full realtor commission
+        commission_listing: half — internally recoverable (household)
+        commission_selling: half — external cost
+        doc_stamps: 0.7% deed doc stamps
+        owner_title: 0.4% of sale (only in seller-pays counties)
+        situational: concession + HOA cap + utility escrow
+        total: sum of everything
+        total_external: total minus listing commission (household-adjusted view)
+        line_items: list for pro-forma display
+    """
+    p = params or get_strategy_defaults()
+    baseline = p.get("bc_baseline_flat", 3000)
+    comm_pct = commission_pct if commission_pct is not None \
+        else p.get("bc_commission_pct", 0.055)
+    listing_share = p.get("bc_commission_listing_share", 0.5)
+
+    comm_total = sale_price * comm_pct
+    comm_listing = comm_total * listing_share
+    comm_selling = comm_total * (1 - listing_share)
+
+    doc_stamps = sale_price * p.get("bc_doc_stamp_pct", 0.007)
+
+    owner_title = 0.0
+    if _seller_pays_owner_title(county, p):
+        owner_title = sale_price * p.get("bc_owner_title_pct_seller_pays", 0.004)
+
+    situational = (seller_concession or 0) + (hoa_capital_contrib or 0) \
+        + (utility_escrow or 0)
+
+    total = baseline + comm_total + doc_stamps + owner_title + situational
+    # Household-adjusted view: listing commission comes back to the household
+    total_external = total - comm_listing
+
+    # Build the display line-items. `line_items` amounts SUM to `total` — the
+    # commission line shows the full total once. The listing/selling split
+    # is available as a separate string (`commission_note`) for the memo to
+    # render as a footnote below the commission line.
+    county_note = county if county else "(county not set)"
+    commission_note = (
+        f"({listing_share*100:.0f}% listing agent ${comm_listing:,.0f} "
+        "— internally recoverable to household*; "
+        f"{(1-listing_share)*100:.0f}% selling agent ${comm_selling:,.0f} "
+        "— external cost)"
+    )
+    line_items = [
+        ("Fixed baseline (attorney, title search, lien search, settlement, "
+         "admin)", baseline),
+        (f"Realtor commissions ({comm_pct*100:.1f}% of sale) *",
+         comm_total),
+        (f"Deed doc stamps (0.70% of sale, FL statutory)", doc_stamps),
+    ]
+    if owner_title > 0:
+        line_items.append(
+            (f"Owner's title policy (0.40% — {county_note} is seller-pays)",
+             owner_title)
+        )
+    if seller_concession and seller_concession > 0:
+        line_items.append(("Seller concession to buyer", seller_concession))
+    if hoa_capital_contrib and hoa_capital_contrib > 0:
+        line_items.append(("HOA capital contribution", hoa_capital_contrib))
+    if utility_escrow and utility_escrow > 0:
+        line_items.append(("Utility escrow holdback", utility_escrow))
+
+    return {
+        "baseline": baseline,
+        "commissions_total": comm_total,
+        "commission_listing": comm_listing,
+        "commission_selling": comm_selling,
+        "commission_note": commission_note,
+        "doc_stamps": doc_stamps,
+        "owner_title": owner_title,
+        "situational": situational,
+        "total": total,
+        "total_external": total_external,
+        "line_items": line_items,
+    }
+
+
 def closing_pcts_for(acquisition_type: str, strategy: str, params: Dict[str, Any]) -> tuple:
     """Return (ab_pct, bc_pct) for the given combination.
 
@@ -1313,6 +1612,26 @@ def compute_recommendation(inputs: Dict[str, Any],
     annual_taxes = prop.get("annual_taxes", 0) or 0
     acquisition_type = (prop.get("acquisition_type") or "Regular")
 
+    # v24 closing cost inputs — all optional; defaults preserve v23 behavior
+    # for existing deals that don't have these fields yet.
+    county = prop.get("county", "") or ""
+    has_hoa = bool(hoa and hoa > 0)
+    is_short_sale_input = bool(prop.get("is_short_sale")
+                                or acquisition_type.lower().startswith("short"))
+    buyer_pays_seller_closings = bool(prop.get("buyer_pays_seller_closings"))
+    seller_concession = float(prop.get("seller_concession", 0) or 0)
+    hoa_capital_contrib = float(prop.get("hoa_capital_contrib", 0) or 0)
+    utility_escrow_estimate = float(prop.get("utility_escrow_estimate", 0) or 0)
+    short_sale_lien_estimate = float(prop.get("short_sale_lien_estimate", 0) or 0)
+    # BC commission override — user can set a per-deal rate (5.0–6.0 typical).
+    # Falls back to bc_commission_pct default (5.5%) when not set.
+    bc_commission_pct_override = prop.get("bc_commission_pct")
+    if bc_commission_pct_override is not None:
+        try:
+            bc_commission_pct_override = float(bc_commission_pct_override)
+        except (TypeError, ValueError):
+            bc_commission_pct_override = None
+
     # Rehab — roof footprint depends on # of stories
     rehab_sub = rehab_subtotal(rehab, sqft, baths, pool, stories=stories)
     rehab_total = rehab_with_contingency(rehab_sub)
@@ -1327,9 +1646,71 @@ def compute_recommendation(inputs: Dict[str, Any],
     ins_per_100k = params.get("insurance_per_100k_monthly", 244)
     ins_bracket = params.get("insurance_bracket", 25_000)
 
-    # AB% / BC% defaults for the MAO calculation (assume Rehab disposition)
-    ab_default = params.get("short_sale_ab_pct", 0.02) if acquisition_type.lower().startswith("short") else params.get("regular_ab_pct", 0.04)
-    bc_default = params.get("rehab_bc_pct", 0.07)
+    # ---- v24 closing cost model for the MAO calculation ---------------
+    # The old flat ab_pct / bc_pct model missed real drivers. Now we decompose:
+    #   AB: baseline flat + %-of-loan + situational (short sale, seller closings)
+    #   BC: baseline flat + commissions + doc stamps + owner's title + situational
+    # For MAO we assume a Rehab disposition (BC is the sell-to-retail flow).
+    # We compute BC once against ARV (fixed given ARV), and compute AB's
+    # SITUATIONAL fixed portion once (doesn't depend on purchase price yet).
+    # ab_pct_of_loan is passed separately so it scales with the loan the MAO
+    # math is solving for.
+
+    # BC (against ARV — the retail sale price we're targeting)
+    bc_dict_for_mao = compute_bc_closing(
+        sale_price=arv,
+        county=county,
+        seller_concession=seller_concession,
+        hoa_capital_contrib=hoa_capital_contrib,
+        utility_escrow=utility_escrow_estimate,
+        commission_pct=bc_commission_pct_override,
+        params=params,
+    )
+    # Decompose BC into a "%-of-ARV" portion and a "flat $" portion so the
+    # closed-form MAO algebra still works:
+    #   pct_of_arv = (commissions + doc_stamps + owner_title) / arv
+    #   flat = baseline + situational  (fixed regardless of arv)
+    if arv > 0:
+        bc_pct_of_arv = (bc_dict_for_mao["commissions_total"]
+                         + bc_dict_for_mao["doc_stamps"]
+                         + bc_dict_for_mao["owner_title"]) / arv
+    else:
+        bc_pct_of_arv = 0
+    bc_flat_for_mao = bc_dict_for_mao["baseline"] + bc_dict_for_mao["situational"]
+
+    # AB — split into: pct_of_purchase (0 in v24), pct_of_loan, flat
+    # The old model rolled everything into a % of purchase. v24 recognizes
+    # that most AB fees scale with LOAN, not purchase (points, doc stamps,
+    # intangible, prepaid interest all scale with loan). Only the situational
+    # buyer-pays-seller-closings has a % of purchase piece (deed doc stamp).
+    ab_pct_of_purchase_for_mao = 0.0
+    ab_pct_of_loan_for_mao = params.get("ab_loan_pct", 0.0270)
+    # Situational AB fixed items (do not depend on purchase). We compute at
+    # a proxy purchase = 0 so buyer_pays_seller_closings items that DO scale
+    # with purchase are handled separately: we approximate them as a % of
+    # purchase by rolling into ab_pct_of_purchase_for_mao when applicable.
+    if buyer_pays_seller_closings:
+        # 0.7% deed doc stamps + optional 0.4% owner's title (if seller-pays county)
+        ab_pct_of_purchase_for_mao += params.get("bc_doc_stamp_pct", 0.007)
+        if _seller_pays_owner_title(county, params):
+            ab_pct_of_purchase_for_mao += params.get(
+                "bc_owner_title_pct_seller_pays", 0.004)
+
+    # AB flat portion (doesn't scale with purchase or loan)
+    ab_flat_for_mao = params.get("ab_baseline_flat", 4750)
+    if buyer_pays_seller_closings:
+        ab_flat_for_mao += params.get("seller_closings_pickup_flat", 700)
+        if has_hoa:
+            ab_flat_for_mao += params.get("hoa_estoppel_fee", 500)
+    if is_short_sale_input:
+        ab_flat_for_mao += params.get("short_sale_negotiation_fee", 4000)
+        ab_flat_for_mao += short_sale_lien_estimate
+
+    # Legacy ab_default / bc_default kept for a) the "what-if" pro-forma
+    # display on Pass/MLS strategies, and b) any external caller that still
+    # reads them.
+    ab_default = ab_pct_of_purchase_for_mao
+    bc_default = bc_pct_of_arv
 
     # MAO calc has chicken-and-egg with holding (insurance depends on loan).
     # Iterate 3x to converge.
@@ -1341,9 +1722,12 @@ def compute_recommendation(inputs: Dict[str, Any],
                                         insurance_bracket=ins_bracket)
         total_holding = monthly_hold * duration
         cash_mao_value = cash_mao_ltc(
-            arv, rehab_total, bc_default, ab_default, total_holding,
+            arv, rehab_total, bc_pct_of_arv, ab_pct_of_purchase_for_mao,
+            total_holding,
             params.get("target_roi", 0.10), ltc, arv_cap,
             orig_flat, orig_pct, rate, duration,
+            ab_flat=ab_flat_for_mao, bc_flat=bc_flat_for_mao,
+            ab_pct_of_loan=ab_pct_of_loan_for_mao,
         )
 
     # cash_offer = MATH ceiling (what an end buyer could pay max).
@@ -1373,10 +1757,13 @@ def compute_recommendation(inputs: Dict[str, Any],
                                     insurance_bracket=ins_bracket)
     total_holding = monthly_hold * duration
 
-    # Net profit AT MAO (conservative ceiling)
+    # Net profit AT MAO (conservative ceiling) — v24 itemized closings
     net_profit_at_mao, tpc_at_mao, roi_at_mao = net_profit_at_price(
-        cash_offer, arv, rehab_total, bc_default, total_holding,
-        ab_default, final_loan, orig_flat, orig_pct, rate, duration,
+        cash_offer, arv, rehab_total, bc_pct_of_arv, total_holding,
+        ab_pct_of_purchase_for_mao, final_loan, orig_flat, orig_pct, rate,
+        duration,
+        ab_flat=ab_flat_for_mao, bc_flat=bc_flat_for_mao,
+        ab_pct_of_loan=ab_pct_of_loan_for_mao,
     )
 
     # Net profit AT ASKING (realistic when asking < MAO)
@@ -1387,8 +1774,11 @@ def compute_recommendation(inputs: Dict[str, Any],
                                             insurance_bracket=ins_bracket)
         total_holding_ask = monthly_hold_ask * duration
         net_profit_at_asking, tpc_at_asking, roi_at_asking = net_profit_at_price(
-            asking, arv, rehab_total, bc_default, total_holding_ask,
-            ab_default, ask_loan, orig_flat, orig_pct, rate, duration,
+            asking, arv, rehab_total, bc_pct_of_arv, total_holding_ask,
+            ab_pct_of_purchase_for_mao, ask_loan, orig_flat, orig_pct, rate,
+            duration,
+            ab_flat=ab_flat_for_mao, bc_flat=bc_flat_for_mao,
+            ab_pct_of_loan=ab_pct_of_loan_for_mao,
         )
         # Use the realistic numbers for the decision
         net_profit = net_profit_at_asking
@@ -1473,7 +1863,10 @@ def compute_recommendation(inputs: Dict[str, Any],
     # comparison cards (e.g. "what would Novation look like on this deal?").
     strategy = force_strategy or auto_strategy
 
-    # Strategy-specific closing %s for the actual recommendation
+    # Strategy-specific closing %s for the actual recommendation.
+    # v24: closing_pcts_for() still returns legacy percentages (used by
+    # DC/Assignment pro-forma logic below), but the itemized dicts drive
+    # the Rehab / Pass / MLS branches so the pro-forma matches reality.
     ab_strat, bc_strat = closing_pcts_for(acquisition_type, strategy, params)
 
     is_pass_strat = ("Pass" in strategy or strategy.startswith("NO-GO"))
@@ -1487,14 +1880,39 @@ def compute_recommendation(inputs: Dict[str, Any],
     cost_of_money_amount = compute_com(likely_loan, orig_flat, orig_pct, rate, duration)
     proforma_kind = "rehab"  # rehab | dc | assignment | novation | pass
 
+    # v24: build itemized AB and BC dicts for the ACTUAL likely purchase.
+    # For strategies where we don't actually close (Assignment / Novation /
+    # Pass / MLS), we still compute a "what-if" version for display purposes.
+    ab_closing_dict = compute_ab_closing(
+        purchase_price=likely_purchase,
+        loan_amount=likely_loan,
+        is_financed=(likely_loan > 0),
+        is_short_sale=is_short_sale_input,
+        buyer_pays_seller_closings=buyer_pays_seller_closings,
+        has_hoa=has_hoa,
+        county=county,
+        short_sale_lien_estimate=short_sale_lien_estimate,
+        params=params,
+    )
+    bc_closing_dict = compute_bc_closing(
+        sale_price=arv,
+        county=county,
+        seller_concession=seller_concession,
+        hoa_capital_contrib=hoa_capital_contrib,
+        utility_escrow=utility_escrow_estimate,
+        commission_pct=bc_commission_pct_override,
+        params=params,
+    )
+
     if is_pass_strat or is_mls_strat:
         # Pass / MLS: pro-forma displays "what we would have made if we'd
-        # done it" using standard rehab-style closing %s rather than 0%.
-        pf_ab = (params.get("short_sale_ab_pct", 0.02)
-                 if is_short_sale_acq else params.get("regular_ab_pct", 0.04))
-        pf_bc = params.get("rehab_bc_pct", 0.07)
-        purchase_closing_costs = likely_purchase * pf_ab
-        sale_closing_costs = arv * pf_bc
+        # done it" using the itemized model.
+        purchase_closing_costs = ab_closing_dict["total"]
+        sale_closing_costs = bc_closing_dict["total"]
+        # Preserve legacy pf_ab/pf_bc for callers that still want a %
+        pf_ab = (purchase_closing_costs / likely_purchase
+                 if likely_purchase > 0 else 0)
+        pf_bc = sale_closing_costs / arv if arv > 0 else 0
         proforma_kind = "pass"
         # net_profit stays as already-calculated (uses rehab defaults)
 
@@ -1506,6 +1924,15 @@ def compute_recommendation(inputs: Dict[str, Any],
         cost_of_money_amount = 0
         likely_total_holding = 0
         likely_monthly_holding = 0
+        # For assignments, zero out the itemized dicts too so downstream
+        # displays don't show phantom costs.
+        ab_closing_dict = compute_ab_closing(
+            purchase_price=0, loan_amount=0, is_financed=False, params=params
+        )
+        ab_closing_dict["total"] = 0
+        ab_closing_dict["line_items"] = []
+        bc_closing_dict["total"] = 0
+        bc_closing_dict["line_items"] = []
         fee_floor = params.get("assignment_fee_min", 5_000)
         fee_ceiling = params.get("assignment_fee_max", 25_000)
         # When seller's asking is BELOW the end-buyer Cash MAO, the spread
@@ -1530,10 +1957,27 @@ def compute_recommendation(inputs: Dict[str, Any],
         # Double Close: we briefly close on the property and immediately
         # resell to an end buyer at THEIR Cash MAO. We do NOT rehab.
         # Profit = end buyer price − our purchase − DC closing − transactional.
+        #
+        # v24 note: DC still uses the legacy flat percentages because the
+        # itemized model isn't a clean fit — same-day double-close has a
+        # different fee structure (no commissions, minimal title work) that
+        # the flat dc_ab_pct / dc_bc_pct (~2% each) still captures well.
+        # Left this branch mostly untouched.
         end_buyer_price = cash_offer        # end buyer's max (Cash MAO)
         our_buy_price = likely_purchase     # asking, or our wholesale willingness
         purchase_closing_costs = our_buy_price * ab_strat
         sale_closing_costs = end_buyer_price * bc_strat
+        # Overwrite itemized dicts with the DC-flavored total for display
+        ab_closing_dict["total"] = purchase_closing_costs
+        ab_closing_dict["line_items"] = [
+            (f"DC AB closing (~{ab_strat*100:.1f}% of purchase — attorney, title, "
+             "transactional funding)", purchase_closing_costs)
+        ]
+        bc_closing_dict["total"] = sale_closing_costs
+        bc_closing_dict["line_items"] = [
+            (f"DC BC closing (~{bc_strat*100:.1f}% of sale — doc stamps + closing)",
+             sale_closing_costs)
+        ]
         # 1% transactional funding fee (replaces normal COM for same-day close)
         transactional_fee = our_buy_price * 0.01
         cost_of_money_amount = transactional_fee
@@ -1552,6 +1996,14 @@ def compute_recommendation(inputs: Dict[str, Any],
         # (Already computed earlier as nov_profit.)
         purchase_closing_costs = 0
         sale_closing_costs = arv * params.get("novation_retail_costs_pct", 0.09)
+        # Zero out AB / repurpose BC
+        ab_closing_dict["total"] = 0
+        ab_closing_dict["line_items"] = []
+        bc_closing_dict["total"] = sale_closing_costs
+        bc_closing_dict["line_items"] = [
+            (f"Novation retail costs ({params.get('novation_retail_costs_pct', 0.09)*100:.1f}% "
+             "of ARV)", sale_closing_costs)
+        ]
         cost_of_money_amount = 0
         likely_total_holding = params.get("novation_holding_costs", 3_000)
         likely_monthly_holding = likely_total_holding / max(duration, 1)
@@ -1561,13 +2013,22 @@ def compute_recommendation(inputs: Dict[str, Any],
         proforma_kind = "novation"
 
     else:
-        # Standard Rehab path (incl. Short Sale → Rehab)
-        purchase_closing_costs = likely_purchase * ab_strat
-        sale_closing_costs = arv * bc_strat
+        # Standard Rehab path (incl. Short Sale → Rehab) — v24 itemized model
+        purchase_closing_costs = ab_closing_dict["total"]
+        sale_closing_costs = bc_closing_dict["total"]
+        # Recompute net_profit using the itemized model.
         net_profit, tpc, roi = net_profit_at_price(
-            likely_purchase, arv, rehab_total, bc_strat, likely_total_holding,
-            ab_strat, likely_loan, orig_flat, orig_pct, rate, duration,
+            likely_purchase, arv, rehab_total,
+            bc_pct_of_arv, likely_total_holding,
+            ab_pct_of_purchase_for_mao, likely_loan,
+            orig_flat, orig_pct, rate, duration,
+            ab_flat=ab_flat_for_mao, bc_flat=bc_flat_for_mao,
+            ab_pct_of_loan=ab_pct_of_loan_for_mao,
         )
+        # Preserve legacy pf_ab/pf_bc so external callers still get a %
+        pf_ab = (purchase_closing_costs / likely_purchase
+                 if likely_purchase > 0 else 0)
+        pf_bc = sale_closing_costs / arv if arv > 0 else 0
         proforma_kind = "rehab"
 
     # Offer terms — pass asking so walk_away, opening, stretch are all
@@ -1728,6 +2189,22 @@ def compute_recommendation(inputs: Dict[str, Any],
         "cost_of_money": cost_of_money_amount,
         "purchase_closing_pct": pf_ab,
         "sale_closing_pct": pf_bc,
+
+        # v24 itemized closing cost model — full breakdown for memos + UI.
+        # Each dict has: baseline, total, line_items (list of (label, amount)),
+        # plus category subtotals. See compute_ab_closing / compute_bc_closing.
+        "ab_closing_itemized": ab_closing_dict,
+        "bc_closing_itemized": bc_closing_dict,
+        # Household-adjusted net: adds the listing commission back (paid to a
+        # family member who is the licensed listing agent). This gives Jo
+        # the "true household economics" view alongside the conservative
+        # LLC-only net profit. Only meaningful for BC-including strategies.
+        "commission_listing_recoverable": bc_closing_dict.get(
+            "commission_listing", 0) if proforma_kind in ("rehab", "novation") else 0,
+        "net_profit_household_adjusted": (
+            net_profit + bc_closing_dict.get("commission_listing", 0)
+            if proforma_kind in ("rehab", "novation") else net_profit
+        ),
         "annual_taxes": annual_taxes,
         "monthly_taxes": annual_taxes / 12.0 if annual_taxes else 0,
         "monthly_insurance": compute_insurance_monthly(likely_loan, ins_per_100k, ins_bracket),

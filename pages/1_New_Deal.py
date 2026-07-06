@@ -104,6 +104,24 @@ def _preload_deal(deal_id: int) -> bool:
     st.session_state["legal_description"] = prop.get("legal_description", "")
     st.session_state["appraiser_county"] = prop.get("county", "")
 
+    # --- 2c. v24 closing-cost detail fields (all optional; drive the itemized
+    # closing model). Existing deals without these will get defaults on load.
+    st.session_state["is_short_sale"] = bool(prop.get("is_short_sale")
+                                             or prop.get("acquisition_type",
+                                                          "Regular").lower().startswith("short"))
+    st.session_state["buyer_pays_seller_closings"] = bool(
+        prop.get("buyer_pays_seller_closings", False))
+    st.session_state["seller_concession"] = int(prop.get("seller_concession", 0) or 0)
+    st.session_state["hoa_capital_contrib"] = int(prop.get("hoa_capital_contrib", 0) or 0)
+    st.session_state["utility_escrow_estimate"] = int(
+        prop.get("utility_escrow_estimate", 0) or 0)
+    st.session_state["short_sale_lien_estimate"] = int(
+        prop.get("short_sale_lien_estimate", 0) or 0)
+    # BC commission per-deal override (float 0.05–0.06). None means use default.
+    _bc_comm = prop.get("bc_commission_pct")
+    st.session_state["bc_commission_pct_pct"] = (
+        float(_bc_comm) * 100 if _bc_comm is not None else 5.5)
+
     # --- 3. Rehab toggles ---
     # The rehab dict lives in session_state.rehab and drives the _toggle()
     # helper. We also need to set each widget's individual key because the
@@ -302,6 +320,89 @@ acquisition_type = c4.selectbox(
     help="Short Sale = seller's lender covers seller-side closing costs.",
 )
 
+# ============================================================================
+# v24 — CLOSING COST DETAIL
+# Drives the itemized AB/BC closing cost model derived from real HUDs.
+# Auto-defaults sensibly for a Regular Broward acquisition; expand to override.
+# ============================================================================
+with st.expander("Closing Cost Detail (county, short sale, concessions, HOA)",
+                 expanded=False):
+    st.caption(
+        "These inputs feed the v24 itemized closing cost model. Defaults "
+        "reflect the most common Broward scenario. Override per deal."
+    )
+    cc1, cc2, cc3 = st.columns(3)
+    county_options = [
+        "Broward", "Miami-Dade", "Palm Beach", "Monroe",
+        "Martin", "St. Lucie", "Indian River", "Sarasota", "Collier",
+        "Lee", "Charlotte", "Hillsborough", "Pinellas", "Pasco",
+        "Orange", "Osceola", "Seminole", "Volusia", "Brevard", "Other",
+    ]
+    # Reuse appraiser_county key so this stays synced with the Contract page
+    _default_county = st.session_state.get("appraiser_county", "Broward")
+    if _default_county not in county_options:
+        _default_county = "Other"
+    county = cc1.selectbox(
+        "County",
+        county_options,
+        index=county_options.index(_default_county),
+        key="appraiser_county",
+        help="Drives owner's title split. Broward/Miami-Dade/Sarasota/Collier "
+             "are buyer-pays counties — everywhere else, seller (us at BC) pays "
+             "the ~0.4% owner's title policy.",
+    )
+    bc_commission_pct_ui = cc2.number_input(
+        "BC Commission % (retail sale)",
+        min_value=0.0, max_value=10.0, value=5.5, step=0.1,
+        key="bc_commission_pct_pct",
+        help="Realtor commission at retail sale. 5.5% default (typical range 5.0–6.0%). "
+             "Half is assumed listing-side (recoverable to household).",
+    )
+    is_short_sale = cc3.checkbox(
+        "Short Sale acquisition",
+        key="is_short_sale",
+        help="Adds $4,000 negotiation fee + optional lien coverage estimate. "
+             "Auto-checked if Acquisition Type = Short Sale.",
+    )
+
+    cc4, cc5, cc6 = st.columns(3)
+    buyer_pays_seller_closings = cc4.checkbox(
+        "We pay seller's closing costs",
+        key="buyer_pays_seller_closings",
+        help="Equity deals where we sweetened the offer by covering the seller's "
+             "title/tax items. Adds 0.7% deed doc stamps + owner's title (in "
+             "seller-pays counties) + $700 title admin + $500 HOA estoppel (if HOA).",
+    )
+    seller_concession = cc5.number_input(
+        "Seller concession to end buyer ($)",
+        min_value=0, value=0, step=500,
+        key="seller_concession",
+        help="Common with FHA buyers ($10K–$20K typical). Reduces net proceeds at BC.",
+    )
+    hoa_capital_contrib = cc6.number_input(
+        "HOA capital contribution ($)",
+        min_value=0, value=0, step=100,
+        key="hoa_capital_contrib",
+        help="One-time HOA transfer fee. Only if HOA. Varies wildly ($500–$3,500).",
+    )
+
+    cc7, cc8, _ = st.columns(3)
+    utility_escrow_estimate = cc7.number_input(
+        "Utility escrow holdback ($)",
+        min_value=0, value=0, step=100,
+        key="utility_escrow_estimate",
+        help="Escrow held pending final utility/water readings ($250–$1,000 typical).",
+    )
+    short_sale_lien_estimate = cc8.number_input(
+        "Est. unpaid liens (short sale) ($)",
+        min_value=0, value=0, step=250,
+        key="short_sale_lien_estimate",
+        help="Municipal violations, unpaid utilities, code enforcement liens that "
+             "the seller's bank won't cover in the short sale. Only applies if "
+             "Short Sale is checked.",
+        disabled=not st.session_state.get("is_short_sale", False),
+    )
+
 property_dict = {
     "address": address, "city": city, "state": state, "zip": zip_code,
     "beds": beds, "baths": baths, "sqft": sqft, "year": year,
@@ -312,6 +413,17 @@ property_dict = {
     "property_type": property_type,
     "waterfront": waterfront,
     "garage_spaces": garage_spaces,
+    # v24 closing-cost detail fields
+    "county": county,
+    "is_short_sale": bool(is_short_sale
+                          or acquisition_type.lower().startswith("short")),
+    "buyer_pays_seller_closings": bool(buyer_pays_seller_closings),
+    "seller_concession": seller_concession,
+    "hoa_capital_contrib": hoa_capital_contrib,
+    "utility_escrow_estimate": utility_escrow_estimate,
+    "short_sale_lien_estimate": short_sale_lien_estimate,
+    # BC commission stored as decimal (0.055 not 5.5)
+    "bc_commission_pct": bc_commission_pct_ui / 100.0,
 }
 
 # ============================================================================

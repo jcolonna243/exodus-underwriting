@@ -422,11 +422,87 @@ with tab_fin:
 
         c1, c2 = st.columns(2)
         new_fin["rehab_bc_pct"] = c1.number_input(
-            "BC — Rehab / Retail sale", value=float(live.get("rehab_bc_pct", 0.07)),
-            min_value=0.0, max_value=0.15, step=0.005, format="%.3f")
+            "BC — Rehab / Retail sale (legacy flat %)",
+            value=float(live.get("rehab_bc_pct", 0.07)),
+            min_value=0.0, max_value=0.15, step=0.005, format="%.3f",
+            help="Legacy flat % — retained for Double Close and fallback paths. "
+                 "For Rehab and Novation strategies, the v24 itemized model below "
+                 "replaces this.")
         new_fin["dc_bc_pct"] = c2.number_input(
             "BC — Wholesale DC sale", value=float(live.get("dc_bc_pct", 0.02)),
             min_value=0.0, max_value=0.10, step=0.005, format="%.3f")
+
+        st.markdown("---")
+        st.markdown("**v24 Itemized Closing Cost Model** — derived from 7 real "
+                    "AB HUDs + 6 BC HUDs. Overrides the flat %s above for "
+                    "Rehab/Novation strategies. Backtested against actuals: the "
+                    "old flat model under-forecasted by ~$17K/deal; the itemized "
+                    "model tracks actuals within ~$5K/deal.")
+
+        st.markdown("**AB (Acquisition) — v24**")
+        c1, c2 = st.columns(2)
+        new_fin["ab_baseline_flat"] = c1.number_input(
+            "AB baseline flat ($) — always charged",
+            value=int(live.get("ab_baseline_flat", 4750)), step=100,
+            help="Attorney $1,250 + Tax Service $999 + Settlement $850 + "
+                 "ALTA endorsement $100 + Lender's Title $700 + Recording $400 "
+                 "+ Courier/Scanning/Notary ~$450 = ~$4,750.")
+        new_fin["ab_loan_pct"] = c2.number_input(
+            "AB loan-related % (of loan)",
+            value=float(live.get("ab_loan_pct", 0.0270)),
+            min_value=0.0, max_value=0.06, step=0.001, format="%.4f",
+            help="1.75% points + 0.35% mtg doc stamps + 0.20% intangible + "
+                 "0.40% prepaid interest = 2.70% of the LOAN amount.")
+
+        c1, c2 = st.columns(2)
+        new_fin["seller_closings_pickup_flat"] = c1.number_input(
+            "Seller-closings pickup — title admin ($)",
+            value=int(live.get("seller_closings_pickup_flat", 700)), step=50,
+            help="Title search + municipal lien search when we cover seller's closings.")
+        new_fin["hoa_estoppel_fee"] = c2.number_input(
+            "HOA estoppel fee ($) — when HOA",
+            value=int(live.get("hoa_estoppel_fee", 500)), step=50)
+
+        new_fin["short_sale_negotiation_fee"] = st.number_input(
+            "Short Sale negotiation fee ($) — flat per SS deal",
+            value=int(live.get("short_sale_negotiation_fee", 4000)), step=100)
+
+        st.markdown("**BC (Disposition) — v24**")
+        c1, c2 = st.columns(2)
+        new_fin["bc_baseline_flat"] = c1.number_input(
+            "BC baseline flat ($) — always charged",
+            value=int(live.get("bc_baseline_flat", 3000)), step=100,
+            help="Attorney $1,250 + Settlement $600–$975 + Title Search $200 + "
+                 "Lien Search $450 + Wire/Courier/Admin ~$150 = ~$3,000.")
+        new_fin["bc_commission_pct"] = c2.number_input(
+            "BC commission % (default retail sale)",
+            value=float(live.get("bc_commission_pct", 0.055)),
+            min_value=0.03, max_value=0.08, step=0.005, format="%.3f",
+            help="Realtor commission at retail sale. Range 5.0–6.0% typical. "
+                 "Per-deal override available on New Deal page.")
+
+        c1, c2 = st.columns(2)
+        new_fin["bc_commission_listing_share"] = c1.number_input(
+            "Listing agent share of commission",
+            value=float(live.get("bc_commission_listing_share", 0.5)),
+            min_value=0.0, max_value=1.0, step=0.05, format="%.2f",
+            help="What portion of the total commission goes to the listing side. "
+                 "Since your listing agent is a family member, this share is "
+                 "shown separately as 'internally recoverable' on the memo.")
+        new_fin["bc_doc_stamp_pct"] = c2.number_input(
+            "Deed doc stamp % (FL statutory)",
+            value=float(live.get("bc_doc_stamp_pct", 0.007)),
+            min_value=0.005, max_value=0.01, step=0.0005, format="%.4f",
+            help="Florida statutory rate on deed. 0.70% everywhere except "
+                 "Miami-Dade single-family. Don't change unless statute changes.")
+
+        new_fin["bc_owner_title_pct_seller_pays"] = st.number_input(
+            "Owner's title policy % (seller-pays counties only)",
+            value=float(live.get("bc_owner_title_pct_seller_pays", 0.004)),
+            min_value=0.002, max_value=0.006, step=0.0005, format="%.4f",
+            help="What we pay at BC in seller-pays counties (Palm Beach, most "
+                 "of FL). In Broward/Miami-Dade/Sarasota/Collier, the buyer "
+                 "pays this and we contribute $0.")
 
         st.markdown("---")
         st.markdown("**Insurance (lender-required, scales with loan)**")
