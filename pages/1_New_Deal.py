@@ -346,7 +346,7 @@ with st.expander("Closing Cost Detail (county, short sale, concessions, HOA)",
         "County",
         county_options,
         index=county_options.index(_default_county),
-        key="appraiser_county",
+        key="cc_detail_county",
         help="Drives owner's title split. Broward/Miami-Dade/Sarasota/Collier "
              "are buyer-pays counties — everywhere else, seller (us at BC) pays "
              "the ~0.4% owner's title policy.",
