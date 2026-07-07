@@ -11,9 +11,6 @@ the actual disposition strategy ends up being something other than Rehab.
 
 Visible to all roles (Admin / Manager / Agent) since agents often present
 this at the kitchen table or over a screen share.
-
-v24.10 — adds Settlement Statement PDF button next to the Cash Offer
-Breakdown button. Compare-vs-Realtor comes in a separate deploy.
 """
 from typing import Any, Dict, List
 
@@ -23,7 +20,6 @@ import streamlit as st
 from modules.auth import require_login, sidebar_account_widget
 from modules.db import get_deal
 from modules.homeowner_pdf import build_homeowner_pdf
-from modules.settlement_pdf import build_settlement_pdf
 from modules.strategy import compute_recommendation, rehab_breakdown
 
 
@@ -51,8 +47,6 @@ if not deal:
 inputs = deal.get("inputs", {}) or {}
 prop = inputs.get("property", {}) or {}
 
-# Recompute as REHAB strategy so every dollar figure here reflects the
-# rehab math — even if the deal was auto-routed to wholesale/novation.
 try:
     rec = compute_recommendation(inputs, force_strategy="Rehab")
 except Exception as e:
@@ -107,7 +101,7 @@ st.caption(
     "no surprises."
 )
 
-# --- Download buttons (top of page, prominent) -------------------------
+# --- Download as PDF (top of page, prominent) -------------------------
 try:
     sqft_for_items = int(prop.get("sqft", 0) or 0)
     baths_for_items = float(prop.get("baths", 0) or 0)
@@ -122,38 +116,16 @@ try:
     safe_addr = "".join(c if c.isalnum() or c in "-_" else "_"
                          for c in (prop.get("address", "deal") or "deal"))[:60]
     safe_date = dt_safe = __import__("datetime").datetime.now().strftime("%Y-%m-%d")
-    c_dl, c_settle, _ = st.columns([2, 2, 3])
+    c_dl, _ = st.columns([2, 5])
     c_dl.download_button(
-        "📄 Offer Breakdown",
+        "📄 Download as PDF",
         data=pdf_bytes,
         file_name=f"Cash_Offer_Breakdown_{safe_addr}_{safe_date}.pdf",
         mime="application/pdf",
         use_container_width=True,
         type="primary",
-        help="Polished, print-ready PDF that mirrors the page below — "
-             "color-coded sections, comps + rehab tables, math reconciliation. "
-             "Designed to leave with the homeowner.",
+        help="Polished, print-ready PDF that mirrors the page below.",
     )
-    # v24.10 — Settlement Statement PDF button
-    seller_dict_for_settle = inputs.get("seller", {}) or {}
-    try:
-        settle_pdf_bytes = build_settlement_pdf(
-            prop=prop,
-            rec=rec,
-            seller=seller_dict_for_settle,
-        )
-        c_settle.download_button(
-            "📊 Settlement Statement",
-            data=settle_pdf_bytes,
-            file_name=f"Preliminary_Settlement_{safe_addr}_{safe_date}.pdf",
-            mime="application/pdf",
-            use_container_width=True,
-            help="Seller-facing net sheet showing sale price, closing "
-                 "costs, mortgage payoff, tax prorations, and the "
-                 "seller's estimated net cash at closing.",
-        )
-    except Exception as e:
-        c_settle.warning(f"Settlement PDF error: {e}")
 except Exception as e:
     st.warning(f"Could not generate the PDF version: {e}")
 
@@ -242,3 +214,155 @@ c_a.markdown(
 )
 c_b.markdown(
     "This is what we estimate it will cost to bring your home to the "
+    "condition of the homes you just saw. Every line item is below — "
+    "nothing inflated, nothing hidden."
+)
+
+sqft_val = int(prop.get("sqft", 0) or 0)
+baths_val = float(prop.get("baths", 0) or 0)
+pool_val = (prop.get("pool", "No") == "Yes")
+stories_val = prop.get("stories", 1) or 1
+try:
+    rehab_items = rehab_breakdown(
+        inputs.get("rehab", {}) or {},
+        sqft_val, baths_val, pool_val, stories=stories_val,
+    )
+except Exception:
+    rehab_items = []
+
+if rehab_items:
+    items_df = pd.DataFrame(rehab_items, columns=["Item", "Cost"])
+    items_df["Cost"] = items_df["Cost"].apply(lambda v: f"${float(v):,.0f}")
+    st.dataframe(items_df, use_container_width=True, hide_index=True)
+
+sub = float(rec.get("rehab_subtotal", 0) or 0)
+contingency = rehab_total - sub
+contingency_label = "Contingency (10%)" if sub > 50_000 else "Contingency ($5,000 flat)"
+c1, c2, c3 = st.columns(3)
+c1.metric("Subtotal", f"${sub:,.0f}")
+c2.metric(contingency_label, f"${contingency:,.0f}",
+          help="A safety buffer for surprises during renovation.")
+c3.metric("Total renovation", f"${rehab_total:,.0f}")
+
+st.markdown("---")
+
+
+# --- Section 3: Our Cost of Doing the Deal -----------------------------
+st.markdown("## 3. Our cost of doing the deal")
+c_a, c_b = st.columns([1, 2])
+c_a.markdown(
+    f"""
+    <div style="background:#FFF9E6; padding:24px; border-radius:8px;
+                border-left:6px solid #C9A227; text-align:center;">
+        <div style="font-size:13px; color:#666; font-weight:600;">
+            OUR DEAL COSTS
+        </div>
+        <div style="font-size:42px; color:#9A7B1A; font-weight:bold;
+                    margin-top:6px;">
+            ${our_costs:,.0f}
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+c_b.markdown(
+    "These are the costs of being the buyer: closing costs when we buy "
+    "from you, holding the property while we renovate (insurance, taxes, "
+    "utilities, financing), and then closing again when we sell."
+)
+
+cost_rows = []
+if purchase_closing > 0:
+    cost_rows.append(("Closing costs when we buy from you",
+                       f"${purchase_closing:,.0f}"))
+if holding > 0:
+    cost_rows.append((f"Holding the property (~6 months — insurance, taxes, utilities)",
+                       f"${holding:,.0f}"))
+if cost_of_money > 0:
+    cost_rows.append(("Financing costs (loan interest + fees)",
+                       f"${cost_of_money:,.0f}"))
+if sale_closing > 0:
+    cost_rows.append(("Closing costs + agent commissions when we sell",
+                       f"${sale_closing:,.0f}"))
+if cost_rows:
+    breakdown_df = pd.DataFrame(cost_rows, columns=["What it covers", "Amount"])
+    st.dataframe(breakdown_df, use_container_width=True, hide_index=True)
+
+st.markdown("---")
+
+
+# --- Section 4: Our Minimum Profit ---------------
+st.markdown("## 4. Our minimum profit")
+c_a, c_b = st.columns([1, 2])
+c_a.markdown(
+    f"""
+    <div style="background:#F0F8F2; padding:24px; border-radius:8px;
+                border-left:6px solid #2E7D32; text-align:center;">
+        <div style="font-size:13px; color:#666; font-weight:600;">
+            MINIMUM PROFIT
+        </div>
+        <div style="font-size:42px; color:#2E7D32; font-weight:bold;
+                    margin-top:6px;">
+            ${min_profit:,.0f}
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+c_b.markdown(
+    "We want to create a win-win — those are the best deals. You walk "
+    "away knowing exactly what you're going to make and that we've been "
+    "transparent with you, with the understanding that we have to make a "
+    "profit to keep this business running. **This is the minimum profit "
+    "we require to make this deal happen.**"
+)
+
+st.markdown("---")
+
+
+# --- Section 5: Your Cash Offer ---------------------------------------
+st.markdown("## 5. Your cash offer")
+st.markdown(
+    f"""
+    <div style="background:#1F4E78; padding:36px; border-radius:10px;
+                text-align:center; margin: 12px 0;">
+        <div style="font-size:14px; color:#B8D8EB; font-weight:600;
+                    letter-spacing:1px;">YOUR HIGHEST CASH OFFER</div>
+        <div style="font-size:72px; color:white; font-weight:bold;
+                    margin-top:8px; line-height:1;">
+            ${cash_offer:,.0f}
+        </div>
+        <div style="font-size:14px; color:#B8D8EB; margin-top:14px;">
+            Cash. As-is. No repairs. No commissions. Close on your timeline.
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+total_back = cash_offer + rehab_total + our_costs + min_profit
+delta = arv - total_back
+st.caption(
+    f"**The math:** ${arv:,.0f} (after-repair value) − ${rehab_total:,.0f} "
+    f"(renovation) − ${our_costs:,.0f} (our deal costs) − "
+    f"${min_profit:,.0f} (our minimum profit) = **${cash_offer:,.0f}** "
+    f"(your cash offer)."
+    + (f"  *(Rounding: ${delta:,.0f})*" if abs(delta) > 50 else "")
+)
+
+
+# --- Footer ------------------------------------------------------------
+st.markdown("---")
+st.markdown(
+    """
+    <div style="text-align:center; color:#666; font-size:13px;
+                padding: 8px 0 20px 0;">
+        What you get: cash, certainty, and a closing date you choose. We pay
+        the closing costs. You sell as-is — no cleaning, no repairs, no
+        showings, no realtor commissions.
+        <br><br>
+        <b>Exodus Property Solutions</b>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
