@@ -20,7 +20,8 @@ import streamlit as st
 from modules.auth import require_login, sidebar_account_widget
 from modules.db import get_deal
 from modules.homeowner_pdf import build_homeowner_pdf
-from modules.settlement_pdf import build_settlement_pdf
+from modules.settlement_pdf import (build_settlement_pdf,
+                                     build_options_comparison_pdf)
 from modules.strategy import compute_recommendation, rehab_breakdown
 
 
@@ -48,6 +49,11 @@ if not deal:
 inputs = deal.get("inputs", {}) or {}
 prop = inputs.get("property", {}) or {}
 
+# Recompute as REHAB strategy so every dollar figure here reflects the
+# rehab math — even if the deal was auto-routed to wholesale/novation.
+# We're showing the seller the buy-rehab-resell math because that's the
+# math that determines what they'd be paid no matter what we do with the
+# contract after we sign.
 try:
     rec = compute_recommendation(inputs, force_strategy="Rehab")
 except Exception as e:
@@ -64,12 +70,20 @@ holding = float(rec.get("total_holding", 0) or 0)
 cost_of_money = float(rec.get("cost_of_money", 0) or 0)
 our_costs = purchase_closing + sale_closing + holding + cost_of_money
 
+# The seller-facing cash offer is clamped to never exceed asking. When
+# asking < MAO, the gap becomes additional margin captured as profit.
 cash_offer = float(
     rec.get("cash_offer_to_seller") or rec.get("cash_offer", 0) or 0
 )
 
+# Recompute the minimum profit so the math reconciles back to ARV.
+# When asking < MAO, our actual profit = ARV − rehab − our_costs − asking,
+# which is BIGGER than net_profit_at_mao. We show the seller our actual
+# extracted margin (not the conservative MAO-floor) — that's honest:
+# this is what we'd make on THIS deal if they accept our offer.
 min_profit = arv - rehab_total - our_costs - cash_offer
 if min_profit < 0:
+    # Edge case (shouldn't happen on a GO deal) — fall back to MAO profit
     min_profit = float(
         rec.get("net_profit_at_mao") or rec.get("net_profit", 0) or 0
     )
@@ -103,6 +117,9 @@ st.caption(
 )
 
 # --- Download as PDF (top of page, prominent) -------------------------
+# Generated on-the-fly with the same numbers shown below. Print-quality
+# typography, color-coded section banners, comps + rehab tables included —
+# meant to be left with the homeowner as a tangible artifact of transparency.
 try:
     sqft_for_items = int(prop.get("sqft", 0) or 0)
     baths_for_items = float(prop.get("baths", 0) or 0)
@@ -117,7 +134,7 @@ try:
     safe_addr = "".join(c if c.isalnum() or c in "-_" else "_"
                          for c in (prop.get("address", "deal") or "deal"))[:60]
     safe_date = dt_safe = __import__("datetime").datetime.now().strftime("%Y-%m-%d")
-    c_dl, c_settle, _ = st.columns([2, 2, 3])
+    c_dl, c_settle, c_compare = st.columns([2, 2, 2])
     c_dl.download_button(
         "📄 Offer Breakdown",
         data=pdf_bytes,
@@ -125,9 +142,15 @@ try:
         mime="application/pdf",
         use_container_width=True,
         type="primary",
-        help="Polished, print-ready PDF that mirrors the page below.",
+        help="Polished, print-ready PDF that mirrors the page below — "
+             "color-coded sections, comps + rehab tables, math reconciliation. "
+             "Designed to leave with the homeowner.",
     )
-    # v24.10 — Settlement Statement PDF button
+    # v24.2 — Preliminary Settlement Statement (seller-facing net sheet)
+    # Same format a Realtor would give a listing seller. Shows the homeowner
+    # exactly what they'll walk away with: sale price minus closing costs,
+    # mortgage payoffs, and prorations. Uses the v24 closing cost model +
+    # county rules from strategy.py.
     seller_dict_for_settle = inputs.get("seller", {}) or {}
     try:
         settle_pdf_bytes = build_settlement_pdf(
@@ -141,10 +164,41 @@ try:
             file_name=f"Preliminary_Settlement_{safe_addr}_{safe_date}.pdf",
             mime="application/pdf",
             use_container_width=True,
-            help="Seller-facing net sheet with closing costs, payoffs, and estimated net cash.",
+            help="Seller-facing net sheet — mirrors what a Realtor's settlement "
+                 "estimate looks like. Shows sale price, closing costs, "
+                 "mortgage payoff, tax prorations, and the seller's estimated "
+                 "net cash at closing. Print and leave with the homeowner.",
         )
-    except Exception as ie:
-        c_settle.warning(f"Settlement PDF error: {ie}")
+    except Exception as e:
+        c_settle.warning(f"Settlement PDF error: {e}")
+    # v24.3 — Sell-to-Us vs Realtor comparison PDF
+    # The persuasion tool. Two columns side-by-side: what the seller nets
+    # working with us (fast, clean, no repairs) vs. listing with a realtor
+    # (higher sticker but 6% commission, inspection concession for property
+    # condition, longer timeline, financing contingent). Uses ARV, rehab
+    # estimate, and cash offer already computed on the deal.
+    try:
+        compare_pdf_bytes = build_options_comparison_pdf(
+            prop=prop,
+            rec=rec,
+            seller=seller_dict_for_settle,
+            # Pass the same rehab breakdown used in the Offer Breakdown PDF
+            # so the seller sees the exact scope of work in the burden callout.
+            rehab_items=rehab_items_for_pdf,
+        )
+        c_compare.download_button(
+            "⚖️ Compare vs Realtor",
+            data=compare_pdf_bytes,
+            file_name=f"Sell_Options_Comparison_{safe_addr}_{safe_date}.pdf",
+            mime="application/pdf",
+            use_container_width=True,
+            help="Side-by-side comparison — Sell to Us vs. List with a "
+                 "Realtor. Includes realtor commission, repair concessions, "
+                 "closing costs, days on market, days to close, and "
+                 "certainty. The persuasion document for undecided sellers.",
+        )
+    except Exception as e:
+        c_compare.warning(f"Compare PDF error: {e}")
 except Exception as e:
     st.warning(f"Could not generate the PDF version: {e}")
 
@@ -181,12 +235,15 @@ c_b.markdown(
     """
 )
 
+# Show the comps that were saved with the deal (v13+ — stored in inputs)
 comps_data = inputs.get("comps") or []
 if comps_data:
     st.markdown("**Recent comparable sales we used to estimate your value:**")
     df_comps = pd.DataFrame(comps_data)
+    # Only show comps the rep actually used (use=True), if that column exists
     if "use" in df_comps.columns:
         df_comps = df_comps[df_comps["use"].fillna(False)]
+    # Pick the columns the seller would care about; gracefully skip missing ones
     display_cols = []
     for col in ["address", "city", "sqft", "beds", "baths", "year",
                 "sold_price", "sold_date"]:
@@ -194,9 +251,14 @@ if comps_data:
             display_cols.append(col)
     if display_cols and not df_comps.empty:
         nice_names = {
-            "address": "Address", "city": "City", "sqft": "Sqft",
-            "beds": "Beds", "baths": "Baths", "year": "Year Built",
-            "sold_price": "Sold For", "sold_date": "Sold Date",
+            "address": "Address",
+            "city": "City",
+            "sqft": "Sqft",
+            "beds": "Beds",
+            "baths": "Baths",
+            "year": "Year Built",
+            "sold_price": "Sold For",
+            "sold_date": "Sold Date",
         }
         show = df_comps[display_cols].rename(columns=nice_names).copy()
         if "Sold For" in show.columns:
@@ -208,6 +270,17 @@ if comps_data:
                 lambda v: f"{int(v):,}" if pd.notna(v) and v else "—"
             )
         st.dataframe(show, use_container_width=True, hide_index=True)
+    else:
+        st.caption("Comparable sale records are stored with this deal but "
+                   "don't have the standard fields. Walk the seller through "
+                   "them verbally or open the New Deal page to see the full "
+                   "list.")
+else:
+    st.caption(
+        "(Comparable sale records weren't saved with this deal. Walk the "
+        "seller through your comps verbally, or save the deal again to "
+        "capture them.)"
+    )
 
 st.markdown("---")
 
@@ -237,6 +310,7 @@ c_b.markdown(
     "nothing inflated, nothing hidden."
 )
 
+# Pull the rehab line items the rep ticked on the deal
 sqft_val = int(prop.get("sqft", 0) or 0)
 baths_val = float(prop.get("baths", 0) or 0)
 pool_val = (prop.get("pool", "No") == "Yes")
@@ -254,13 +328,15 @@ if rehab_items:
     items_df["Cost"] = items_df["Cost"].apply(lambda v: f"${float(v):,.0f}")
     st.dataframe(items_df, use_container_width=True, hide_index=True)
 
+# Subtotal / contingency / total
 sub = float(rec.get("rehab_subtotal", 0) or 0)
 contingency = rehab_total - sub
 contingency_label = "Contingency (10%)" if sub > 50_000 else "Contingency ($5,000 flat)"
 c1, c2, c3 = st.columns(3)
 c1.metric("Subtotal", f"${sub:,.0f}")
 c2.metric(contingency_label, f"${contingency:,.0f}",
-          help="A safety buffer for surprises during renovation.")
+          help="A safety buffer for surprises during renovation — "
+               "almost every project has them.")
 c3.metric("Total renovation", f"${rehab_total:,.0f}")
 
 st.markdown("---")
@@ -290,6 +366,7 @@ c_b.markdown(
     "utilities, financing), and then closing again when we sell."
 )
 
+# Simple breakdown — no AB/BC jargon
 cost_rows = []
 if purchase_closing > 0:
     cost_rows.append(("Closing costs when we buy from you",
@@ -310,7 +387,7 @@ if cost_rows:
 st.markdown("---")
 
 
-# --- Section 4: Our Minimum Profit ---------------
+# --- Section 4: Our Minimum Profit (Jo's exact wording) ---------------
 st.markdown("## 4. Our minimum profit")
 c_a, c_b = st.columns([1, 2])
 c_a.markdown(
@@ -359,6 +436,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# Sanity check — these should add up to ARV
 total_back = cash_offer + rehab_total + our_costs + min_profit
 delta = arv - total_back
 st.caption(
@@ -385,3 +463,20 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+# Bottom PDF download button — duplicated from the top so the rep doesn't
+# have to scroll back up after walking the seller through the page.
+st.markdown("---")
+c_dl_b, _ = st.columns([2, 5])
+try:
+    c_dl_b.download_button(
+        "📄 Download as PDF",
+        data=pdf_bytes,  # already built above
+        file_name=f"Cash_Offer_Breakdown_{safe_addr}_{safe_date}.pdf",
+        mime="application/pdf",
+        use_container_width=True,
+        type="primary",
+        key="homeowner_pdf_bottom",
+    )
+except Exception:
+    pass
