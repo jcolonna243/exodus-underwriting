@@ -127,9 +127,7 @@ try:
         type="primary",
         help="Polished, print-ready PDF that mirrors the page below.",
     )
-except Exception as e:
-    st.warning(f"Could not generate the PDF version: {e}")
-  # v24.10 — Settlement Statement PDF button
+    # v24.10 — Settlement Statement PDF button
     seller_dict_for_settle = inputs.get("seller", {}) or {}
     try:
         settle_pdf_bytes = build_settlement_pdf(
@@ -147,6 +145,8 @@ except Exception as e:
         )
     except Exception as ie:
         c_settle.warning(f"Settlement PDF error: {ie}")
+except Exception as e:
+    st.warning(f"Could not generate the PDF version: {e}")
 
 st.markdown("---")
 
