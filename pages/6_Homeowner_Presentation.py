@@ -20,6 +20,7 @@ import streamlit as st
 from modules.auth import require_login, sidebar_account_widget
 from modules.db import get_deal
 from modules.homeowner_pdf import build_homeowner_pdf
+from modules.settlement_pdf import build_settlement_pdf
 from modules.strategy import compute_recommendation, rehab_breakdown
 
 
@@ -116,9 +117,9 @@ try:
     safe_addr = "".join(c if c.isalnum() or c in "-_" else "_"
                          for c in (prop.get("address", "deal") or "deal"))[:60]
     safe_date = dt_safe = __import__("datetime").datetime.now().strftime("%Y-%m-%d")
-    c_dl, _ = st.columns([2, 5])
+    c_dl, c_settle, _ = st.columns([2, 2, 3])
     c_dl.download_button(
-        "📄 Download as PDF",
+        "📄 Offer Breakdown",
         data=pdf_bytes,
         file_name=f"Cash_Offer_Breakdown_{safe_addr}_{safe_date}.pdf",
         mime="application/pdf",
@@ -128,6 +129,24 @@ try:
     )
 except Exception as e:
     st.warning(f"Could not generate the PDF version: {e}")
+  # v24.10 — Settlement Statement PDF button
+    seller_dict_for_settle = inputs.get("seller", {}) or {}
+    try:
+        settle_pdf_bytes = build_settlement_pdf(
+            prop=prop,
+            rec=rec,
+            seller=seller_dict_for_settle,
+        )
+        c_settle.download_button(
+            "📊 Settlement Statement",
+            data=settle_pdf_bytes,
+            file_name=f"Preliminary_Settlement_{safe_addr}_{safe_date}.pdf",
+            mime="application/pdf",
+            use_container_width=True,
+            help="Seller-facing net sheet with closing costs, payoffs, and estimated net cash.",
+        )
+    except Exception as ie:
+        c_settle.warning(f"Settlement PDF error: {ie}")
 
 st.markdown("---")
 
