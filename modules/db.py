@@ -178,6 +178,36 @@ def delete_deal(deal_id: int) -> bool:
     return bool(res.data)
 
 
+def save_dispo_edits(deal_id: int, dispo_edits: Dict[str, Any]) -> bool:
+    """Persist Dispo Marketing page edits into inputs["dispo"] without
+    changing any underwriting inputs. Returns True if the update succeeded.
+
+    Dispo edits are the rep's disposition-side tweaks (bumped comp prices,
+    custom rehab items, asking price, ARV override, range %) — kept apart
+    from the underwriting-side numbers used to make the buy decision. The
+    compute_recommendation engine and every other page ignore inputs["dispo"];
+    only the Dispo Marketing page reads and writes it."""
+    c = get_client()
+    res = c.table("deals").select("inputs").eq("id", deal_id).limit(1).execute()
+    if not res.data:
+        return False
+    inputs = res.data[0].get("inputs") or {}
+    inputs = dict(inputs)
+    inputs["dispo"] = dispo_edits
+    upd = c.table("deals").update({"inputs": inputs}).eq("id", deal_id).execute()
+    return bool(upd.data)
+
+
+def get_dispo_edits(deal_id: int) -> Dict[str, Any]:
+    """Return the saved Dispo Marketing edits for this deal (or {} if none)."""
+    c = get_client()
+    res = c.table("deals").select("inputs").eq("id", deal_id).limit(1).execute()
+    if not res.data:
+        return {}
+    inputs = res.data[0].get("inputs") or {}
+    return (inputs.get("dispo") or {})
+
+
 def distinct_strategies() -> List[str]:
     """Return list of unique strategies in use. Supabase has no DISTINCT in
     its REST API, so we fetch the column and dedupe in Python."""
