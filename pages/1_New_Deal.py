@@ -1296,6 +1296,34 @@ if _contract_deal_id and _can_prepare_contract:
                 "Deal queued. Open the **📄 Prepare Contract** page "
                 "from the left sidebar."
             )
+
+# Dispo Marketing — only available after save. Agents can use it too — the
+# cash-buyer deal sheet is internal-facing and useful for anyone routing the
+# deal to a buyer.
+_dispo_deal_id = st.session_state.get("loaded_deal_id")
+if _dispo_deal_id:
+    if st.button(
+        "🚀 Dispo Marketing",
+        key="dispo_launch_btn",
+        use_container_width=True,
+        type="secondary",
+        help="Open the Dispo Marketing editor. Edit asking price, comps, "
+             "and rehab scope, then generate a two-page PDF: cash-buyer "
+             "deal sheet on page 1, ready-to-copy Email / SMS / Facebook "
+             "drafts on page 2.",
+    ):
+        st.session_state["dispo_deal_id"] = int(_dispo_deal_id)
+        try:
+            st.switch_page("pages/8_Dispo_Marketing.py")
+        except Exception:
+            st.info(
+                "Deal queued. Open the **🚀 Dispo Marketing** page "
+                "from the left sidebar."
+            )
+else:
+    st.caption(
+        "💡 Save this deal first to unlock the **🚀 Dispo Marketing** editor."
+    )
 elif _can_prepare_contract:
     st.caption(
         "💡 Save this deal first to unlock the **📄 Prepare Contract** "
