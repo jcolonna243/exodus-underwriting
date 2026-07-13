@@ -1,9 +1,14 @@
 """Dispo Marketing — cash-buyer deal sheet editor + PDF generator.
 
-Vertical layout (v24.12c): three parameter inputs sit side-by-side at the
-top (Asking / ARV / Rehab range width), then the Comps and Rehab tables
-render FULL WIDTH so every column is visible without horizontal scrolling.
-Live metrics + top-5 comps preview + download button live at the bottom.
+v24.12d layout:
+  - Section 1: Asking + Rehab range width side-by-side (2 cols).
+  - Section 2: Comps editor (full width). Bump prices, add rows.
+  - Section 3: Rehab line items editor (full width).
+  - Section 4: Live preview.
+      * ARV is AUTO-COMPUTED from top-5 comps' avg $/sqft × subject sqft.
+      * "Override ARV" input right above the metrics — 0 = use auto.
+      * 4-metric row: Asking / ARV / Rehab range / Spread.
+      * Top 5 comps preview + Generate PDF button.
 """
 from typing import Any, Dict, List
 
@@ -40,8 +45,6 @@ if not deal:
 inputs = deal.get("inputs", {}) or {}
 prop = inputs.get("property", {}) or {}
 
-# Recompute as REHAB strategy so every field (ARV, rehab_total, MAO) reflects
-# the buy-rehab-resell math — the math a cash buyer cares about.
 try:
     rec = compute_recommendation(inputs, force_strategy="Rehab")
 except Exception as e:
@@ -72,20 +75,20 @@ st.markdown(
 )
 
 st.caption(
-    "Edit the asking price, ARV, comps, and rehab scope below. The "
-    "📊 preview at the bottom updates live — click **Generate Dispo "
-    "Marketing PDF** when you're ready."
+    "Edit the asking price, comps, and rehab scope below. ARV auto-calculates "
+    "from your top-5 comps × subject sqft — bump comps up to raise ARV. "
+    "The 📊 preview at the bottom updates live."
 )
 
 st.markdown("---")
 
 
 # ============================================================================
-# SECTION 1 — Deal parameters (3 inputs side-by-side, full page width)
+# SECTION 1 — Asking + Rehab range width (2 cols, full page width)
 # ============================================================================
 st.markdown("## ✏️ Deal parameters")
 
-pc1, pc2, pc3 = st.columns(3)
+pc1, pc2 = st.columns(2)
 
 with pc1:
     st.markdown("#### 💰 Asking price")
@@ -101,22 +104,7 @@ with pc1:
     st.caption("Blank = TBD on the PDF")
 
 with pc2:
-    st.markdown("#### 📈 ARV")
-    _default_arv = float(rec.get("arv", 0) or 0)
-    arv_override = st.number_input(
-        "ARV to justify with your comps",
-        min_value=0, value=int(_default_arv) if _default_arv > 0 else 0,
-        step=1000,
-        help="Pre-filled from your underwriting file. Bump it up if your "
-             "top comps support a higher number, trim it down if you want "
-             "the story to feel more conservative.",
-        key="dispo_arv_override",
-        label_visibility="collapsed",
-    )
-    st.caption("From underwriting — editable")
-
-with pc3:
-    st.markdown("#### 📏 Rehab range")
+    st.markdown("#### 📏 Rehab range width")
     range_pct = st.slider(
         "How wide should the LOW-HIGH range be?",
         min_value=5, max_value=30, value=15, step=1,
@@ -136,10 +124,9 @@ st.markdown("---")
 st.markdown("## 🏘️ Comps — highest defensible")
 st.caption(
     "Pre-loaded from your underwriting file, sorted by sold price DESC. "
-    "Bump prices up if you want the ARV story to look stronger. "
-    "**Click the blank row at the bottom of the table to add a new comp** — "
-    "type the address, city, sold price, sqft, etc. Only the **top 5** "
-    "by sold price get printed on the PDF."
+    "Bump prices up to raise ARV. **Click the blank row at the bottom of the "
+    "table to add a new comp** — type the address, city, sold price, sqft, "
+    "etc. Only the **top 5** by sold price drive the ARV and print on the PDF."
 )
 
 saved_comps = inputs.get("comps") or []
@@ -201,7 +188,7 @@ st.caption(
     "Pre-loaded from your underwriting rehab breakdown. Edit any cost, "
     "**click the blank row at the bottom to add missing items** (pool, "
     "landscaping, etc.), or delete anything a cash buyer wouldn't care "
-    "about. The LOW-HIGH range on the PDF is computed from these lines."
+    "about. Cost detail like *sq ft × $/sf* is scrubbed on the PDF."
 )
 
 sqft_val = int(prop.get("sqft", 0) or 0)
@@ -273,20 +260,73 @@ def _clean_rehab(df: pd.DataFrame) -> List:
     return out
 
 
+def _compute_auto_arv(clean_comps: List[Dict[str, Any]],
+                     subject_sqft: int) -> float:
+    """Auto-ARV = subject sqft × avg $/sqft of top-5 comps by sold price.
+    Only includes comps that have BOTH sold_price and sqft."""
+    if not subject_sqft or subject_sqft <= 0:
+        return 0.0
+    priced = [c for c in clean_comps
+              if c.get("sold_price") and c.get("sqft")
+              and float(c["sqft"]) > 0]
+    if not priced:
+        return 0.0
+    priced.sort(key=lambda c: c["sold_price"], reverse=True)
+    top5 = priced[:5]
+    ppsqft_vals = [float(c["sold_price"]) / float(c["sqft"]) for c in top5]
+    avg_ppsqft = sum(ppsqft_vals) / len(ppsqft_vals)
+    # Round to nearest $1000 for clean presentation
+    return round(avg_ppsqft * subject_sqft, -3)
+
+
 clean_comps = _clean_comps(edited_comps)
 clean_rehab = _clean_rehab(edited_rehab)
 
-# Compute live math (use the user's ARV override so the metrics and PDF
-# reflect any bump the user made).
-arv = float(arv_override if arv_override else rec.get("arv", 0) or 0)
-rehab_est = sum(c for _, c in clean_rehab)
+subject_sqft = int(prop.get("sqft", 0) or 0)
+auto_arv = _compute_auto_arv(clean_comps, subject_sqft)
+
+# ARV override input — 0 means use auto
+override_col, help_col = st.columns([1, 3])
+with override_col:
+    arv_override = st.number_input(
+        "Override ARV (0 = use auto)",
+        min_value=0, value=0, step=1000,
+        key="dispo_arv_override",
+        help="Auto ARV is computed from your top-5 comps' avg $/sqft × the "
+             "subject property sqft. Set a non-zero number here to override.",
+    )
+with help_col:
+    if subject_sqft > 0 and auto_arv > 0:
+        top5_priced = sorted(
+            [c for c in clean_comps
+             if c.get("sold_price") and c.get("sqft")
+             and float(c["sqft"]) > 0],
+            key=lambda c: c["sold_price"], reverse=True,
+        )[:5]
+        avg_ppsqft = (sum(float(c["sold_price"]) / float(c["sqft"])
+                          for c in top5_priced) / len(top5_priced))
+        st.info(
+            f"**Auto ARV: ${auto_arv:,.0f}** "
+            f"(avg ${avg_ppsqft:,.0f}/sqft × {subject_sqft:,} sqft, "
+            f"from top {len(top5_priced)} comps)"
+        )
+    else:
+        st.warning(
+            "Need at least 1 comp with both a Sold Price AND a Sqft, plus "
+            "a subject-property Sqft, to auto-calculate ARV."
+        )
+
+# Actual ARV = override if set, else auto
+arv = float(arv_override if arv_override and arv_override > 0 else auto_arv)
+
+# Rehab range from cleaned items
 low_mult = 1.0 - range_pct
 high_mult = 1.0 + range_pct
 rehab_low = sum(round(c * low_mult / 50) * 50 for _, c in clean_rehab)
 rehab_high = sum(round(c * high_mult / 50) * 50 for _, c in clean_rehab)
 rehab_mid = (rehab_low + rehab_high) / 2
 
-if asking_price and asking_price > 0:
+if asking_price and asking_price > 0 and arv > 0:
     spread = arv - asking_price - rehab_mid
 else:
     spread = None
@@ -295,7 +335,7 @@ else:
 m1, m2, m3, m4 = st.columns(4)
 m1.metric("Asking",
           f"${asking_price:,.0f}" if asking_price else "TBD")
-m2.metric("ARV", f"${arv:,.0f}")
+m2.metric("ARV", f"${arv:,.0f}" if arv > 0 else "TBD")
 m3.metric(
     "Rehab (LOW-HIGH)",
     f"${rehab_low:,.0f} – ${rehab_high:,.0f}",
@@ -313,7 +353,6 @@ if clean_comps:
     )[:5]
     if top5:
         preview_df = pd.DataFrame(top5)
-        # Only show columns we actually populate on the PDF
         preview_cols = [c for c in ["address", "city", "beds", "baths",
                                      "sqft", "sold_price", "sold_date"]
                         if c in preview_df.columns]
@@ -341,8 +380,8 @@ st.markdown("---")
 
 
 def _gen_pdf() -> bytes:
-    # Merge the user's ARV override into rec so the PDF sees it in the ARV
-    # box, the comps banner, and the marketing copy templates.
+    # Merge the effective ARV into rec so the PDF's ARV box, comps banner,
+    # and email/SMS/FB copy templates all reflect it.
     rec_for_pdf = {**rec, "arv": arv}
     return build_dispo_marketing_pdf(
         prop=prop,
