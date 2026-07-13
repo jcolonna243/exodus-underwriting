@@ -88,11 +88,12 @@ if selected_id > 0:
         _can_prepare_contract = st_settings.can_view_admin(
             user.get("email", "") if isinstance(user, dict) else "")
         if _can_prepare_contract:
-            (c_edit, c_home, c_contract, c_word, c_pdf,
-             c_del) = st.columns(6)
+            (c_edit, c_home, c_contract, c_dispo, c_word, c_pdf,
+             c_del) = st.columns(7)
         else:
             c_edit, c_home, c_word, c_pdf, c_del = st.columns(5)
             c_contract = None
+            c_dispo = None
 
         # Edit — queue the deal for loading on New Deal page and switch.
         # No RentCast call needed; comps and inputs are restored from JSONB.
@@ -149,6 +150,25 @@ if selected_id > 0:
             except Exception:
                 st.info(
                     "Deal queued. Open the **📄 Prepare Contract** page "
+                    "from the left sidebar."
+                )
+
+        # Dispo Marketing (Admin/Manager only) — cash-buyer deal sheet + copy
+        if c_dispo is not None and c_dispo.button(
+            "🚀 Dispo Marketing",
+            key=f"dispo_btn_{deal['id']}",
+            use_container_width=True,
+            help="Open the Dispo Marketing editor. Edit asking price, comps, "
+                 "and rehab scope, then generate a two-page PDF: cash-buyer "
+                 "deal sheet on page 1, ready-to-copy Email / SMS / Facebook "
+                 "drafts on page 2.",
+        ):
+            st.session_state["dispo_deal_id"] = int(deal["id"])
+            try:
+                st.switch_page("pages/8_Dispo_Marketing.py")
+            except Exception:
+                st.info(
+                    "Deal queued. Open the **🚀 Dispo Marketing** page "
                     "from the left sidebar."
                 )
 
