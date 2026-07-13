@@ -134,6 +134,15 @@ def _facebook_copy(prop: Dict, rec: Dict, asking: float, arv: float,
     )
 
 
+def _clean_rehab_label(lbl) -> str:
+    """Strip parenthesized unit-cost detail from a rehab item label so we
+    don't leak our per-sqft / per-ton / per-bathroom cost structure to cash
+    buyers. "Roof (Shingle, 1-story, 1,796 sf x $10.50/sf)" -> "Roof"."""
+    if not lbl:
+        return "" if lbl is None else str(lbl)
+    return str(lbl).split(" (")[0].strip()
+
+
 def build_dispo_marketing_pdf(
     prop: Dict[str, Any],
     rec: Dict[str, Any],
@@ -349,7 +358,7 @@ def build_dispo_marketing_pdf(
         rows = [["Item", "Low", "Est.", "High"]]
         for lbl, low, mid, high in ranged_items:
             rows.append([
-                lbl,
+                _clean_rehab_label(lbl),
                 _fmt_money(low),
                 _fmt_money(mid),
                 _fmt_money(high),
