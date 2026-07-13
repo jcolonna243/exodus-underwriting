@@ -103,6 +103,19 @@ with col_edit:
         key="dispo_asking",
     )
 
+    # --- ARV override ---------------------------------------------------
+    st.markdown("### 📈 ARV (After-Repair Value)")
+    _default_arv = float(rec.get("arv", 0) or 0)
+    arv_override = st.number_input(
+        "ARV to justify with your comps",
+        min_value=0, value=int(_default_arv) if _default_arv > 0 else 0,
+        step=1000,
+        help="Pre-filled from your underwriting file. Bump it up if the "
+             "top comps support a higher number, or trim it down if you "
+             "want the cash-buyer story to feel more conservative.",
+        key="dispo_arv_override",
+    )
+
     # --- Rehab range % --------------------------------------------------
     st.markdown("### 📏 Rehab range width")
     range_pct = st.slider(
@@ -117,9 +130,10 @@ with col_edit:
     st.markdown("### 🏘️ Comps — highest defensible")
     st.caption(
         "Pre-loaded from your underwriting file, sorted by sold price DESC. "
-        "Bump prices up if you want the ARV story to look stronger. Add new "
-        "rows for comps you found after underwriting. Only the **top 5** by "
-        "sold price get printed on the PDF."
+        "Bump prices up if you want the ARV story to look stronger. "
+        "**Click the blank row at the bottom of the table to add a new comp** — "
+        "type the address, city, sold price, sqft, etc. Only the **top 5** "
+        "by sold price get printed on the PDF."
     )
     saved_comps = inputs.get("comps") or []
     if saved_comps:
@@ -235,8 +249,9 @@ with col_preview:
     clean_comps = _clean_comps(edited_comps)
     clean_rehab = _clean_rehab(edited_rehab)
 
-    # Compute live math
-    arv = float(rec.get("arv", 0) or 0)
+    # Compute live math (use the user's ARV override so the metrics and PDF
+    # reflect any bump the user made)
+    arv = float(arv_override if arv_override else rec.get("arv", 0) or 0)
     rehab_est = sum(c for _, c in clean_rehab)
     low_mult = 1.0 - range_pct
     high_mult = 1.0 + range_pct
@@ -282,9 +297,12 @@ with col_preview:
     st.markdown("---")
 
     def _gen_pdf() -> bytes:
+        # Merge the user's ARV override into rec so the PDF sees it in the
+        # ARV box, the comps banner, and the marketing copy templates.
+        rec_for_pdf = {**rec, "arv": arv}
         return build_dispo_marketing_pdf(
             prop=prop,
-            rec=rec,
+            rec=rec_for_pdf,
             inputs={"comps": clean_comps},
             rehab_items=clean_rehab,
             asking_price_override=asking_price,
