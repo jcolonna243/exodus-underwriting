@@ -1296,6 +1296,11 @@ if _contract_deal_id and _can_prepare_contract:
                 "Deal queued. Open the **📄 Prepare Contract** page "
                 "from the left sidebar."
             )
+elif _can_prepare_contract:
+    st.caption(
+        "💡 Save this deal first to unlock the **📄 Prepare Contract** "
+        "PDF generator."
+    )
 
 # Dispo Marketing — only available after save. Agents can use it too — the
 # cash-buyer deal sheet is internal-facing and useful for anyone routing the
@@ -1323,11 +1328,6 @@ if _dispo_deal_id:
 else:
     st.caption(
         "💡 Save this deal first to unlock the **🚀 Dispo Marketing** editor."
-    )
-elif _can_prepare_contract:
-    st.caption(
-        "💡 Save this deal first to unlock the **📄 Prepare Contract** "
-        "PDF generator."
     )
 
 # ============================================================================
