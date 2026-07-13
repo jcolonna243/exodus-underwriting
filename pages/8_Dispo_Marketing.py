@@ -147,24 +147,34 @@ st.caption(
 )
 
 # Prefer previously-saved Dispo edits; fall back to underwriting comps.
-saved_comps = saved_dispo.get("comps") or inputs.get("comps") or []
-if saved_comps:
-    comps_df = pd.DataFrame(saved_comps)
+# CRITICAL: only build the initial dataframe ONCE per deal load and cache in
+# session state. If we rebuild on every rerun, the save-on-rerun cycle
+# writes partial rows (dropped by _clean_comps) back to disk, and the next
+# rerun's rebuild loses in-progress edits — st.data_editor's internal delta
+# gets misaligned with the base and cells appear as NaN.
+_comps_cache_key = f"_dispo_comps_initial_{deal_id}"
+if _comps_cache_key not in st.session_state:
+    saved_comps = saved_dispo.get("comps") or inputs.get("comps") or []
+    if saved_comps:
+        comps_df = pd.DataFrame(saved_comps)
+    else:
+        comps_df = pd.DataFrame(columns=[
+            "address", "city", "beds", "baths", "sqft",
+            "year", "sold_price", "sold_date",
+        ])
+    display_cols = ["address", "city", "beds", "baths", "sqft",
+                    "year", "sold_price", "sold_date"]
+    for c in display_cols:
+        if c not in comps_df.columns:
+            comps_df[c] = None
+    comps_df = comps_df[display_cols]
+    if "sold_price" in comps_df.columns:
+        comps_df = comps_df.sort_values(
+            by="sold_price", ascending=False, na_position="last",
+        ).reset_index(drop=True)
+    st.session_state[_comps_cache_key] = comps_df
 else:
-    comps_df = pd.DataFrame(columns=[
-        "address", "city", "beds", "baths", "sqft",
-        "year", "sold_price", "sold_date",
-    ])
-display_cols = ["address", "city", "beds", "baths", "sqft",
-                "year", "sold_price", "sold_date"]
-for c in display_cols:
-    if c not in comps_df.columns:
-        comps_df[c] = None
-comps_df = comps_df[display_cols]
-if "sold_price" in comps_df.columns:
-    comps_df = comps_df.sort_values(
-        by="sold_price", ascending=False, na_position="last",
-    ).reset_index(drop=True)
+    comps_df = st.session_state[_comps_cache_key]
 
 edited_comps = st.data_editor(
     comps_df,
@@ -213,18 +223,24 @@ sqft_val = int(prop.get("sqft", 0) or 0)
 baths_val = float(prop.get("baths", 0) or 0)
 pool_val = (prop.get("pool", "No") == "Yes")
 stories_val = prop.get("stories", 1) or 1
-if saved_dispo.get("rehab_items"):
-    # Restore what the rep last edited.
-    initial_items = [tuple(item) for item in saved_dispo["rehab_items"]]
-else:
-    try:
-        initial_items = rehab_breakdown(
-            inputs.get("rehab", {}) or {},
-            sqft_val, baths_val, pool_val, stories=stories_val,
-        )
-    except Exception:
-        initial_items = []
-rehab_df = pd.DataFrame(initial_items, columns=["Item", "Cost"])
+# Same caching pattern as comps — build once per deal, then let
+# st.data_editor manage subsequent edits through its `key`.
+_rehab_cache_key = f"_dispo_rehab_initial_{deal_id}"
+if _rehab_cache_key not in st.session_state:
+    if saved_dispo.get("rehab_items"):
+        initial_items = [tuple(item) for item in saved_dispo["rehab_items"]]
+    else:
+        try:
+            initial_items = rehab_breakdown(
+                inputs.get("rehab", {}) or {},
+                sqft_val, baths_val, pool_val, stories=stories_val,
+            )
+        except Exception:
+            initial_items = []
+    st.session_state[_rehab_cache_key] = pd.DataFrame(
+        initial_items, columns=["Item", "Cost"],
+    )
+rehab_df = st.session_state[_rehab_cache_key]
 
 edited_rehab = st.data_editor(
     rehab_df,
@@ -471,7 +487,9 @@ with _reset_col:
             pass
         for k in ["dispo_asking", "dispo_arv_override", "dispo_range_pct",
                   "dispo_comps_editor", "dispo_rehab_editor",
-                  "_dispo_loaded_deal"]:
+                  "_dispo_loaded_deal",
+                  f"_dispo_comps_initial_{deal_id}",
+                  f"_dispo_rehab_initial_{deal_id}"]:
             st.session_state.pop(k, None)
         st.rerun()
 with _reset_help:
