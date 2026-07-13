@@ -16,7 +16,7 @@ import pandas as pd
 import streamlit as st
 
 from modules.auth import require_login, sidebar_account_widget
-from modules.db import get_deal
+from modules.db import get_deal, get_dispo_edits, save_dispo_edits
 from modules.dispo_marketing_pdf import build_dispo_marketing_pdf
 from modules.strategy import compute_recommendation, rehab_breakdown
 
@@ -44,6 +44,23 @@ if not deal:
 
 inputs = deal.get("inputs", {}) or {}
 prop = inputs.get("property", {}) or {}
+
+# --- Load saved Dispo edits (kept separate from underwriting inputs) ---
+saved_dispo = get_dispo_edits(int(deal_id)) or {}
+
+# Pre-populate widget session state from saved edits ONCE per deal load.
+# Streamlit uses session_state[key] as the source of truth on re-renders,
+# so this only matters the first time we land on the page for this deal.
+_load_marker_key = "_dispo_loaded_deal"
+if st.session_state.get(_load_marker_key) != deal_id:
+    if "asking_price" in saved_dispo:
+        st.session_state["dispo_asking"] = int(saved_dispo["asking_price"] or 0) or None
+    if "arv_override" in saved_dispo:
+        st.session_state["dispo_arv_override"] = int(saved_dispo["arv_override"] or 0)
+    if "range_pct" in saved_dispo:
+        # Slider stores percent (5-30), not decimal fraction.
+        st.session_state["dispo_range_pct"] = int(round(float(saved_dispo["range_pct"]) * 100))
+    st.session_state[_load_marker_key] = deal_id
 
 try:
     rec = compute_recommendation(inputs, force_strategy="Rehab")
@@ -129,7 +146,8 @@ st.caption(
     "etc. Only the **top 5** by sold price drive the ARV and print on the PDF."
 )
 
-saved_comps = inputs.get("comps") or []
+# Prefer previously-saved Dispo edits; fall back to underwriting comps.
+saved_comps = saved_dispo.get("comps") or inputs.get("comps") or []
 if saved_comps:
     comps_df = pd.DataFrame(saved_comps)
 else:
@@ -195,13 +213,17 @@ sqft_val = int(prop.get("sqft", 0) or 0)
 baths_val = float(prop.get("baths", 0) or 0)
 pool_val = (prop.get("pool", "No") == "Yes")
 stories_val = prop.get("stories", 1) or 1
-try:
-    initial_items = rehab_breakdown(
-        inputs.get("rehab", {}) or {},
-        sqft_val, baths_val, pool_val, stories=stories_val,
-    )
-except Exception:
-    initial_items = []
+if saved_dispo.get("rehab_items"):
+    # Restore what the rep last edited.
+    initial_items = [tuple(item) for item in saved_dispo["rehab_items"]]
+else:
+    try:
+        initial_items = rehab_breakdown(
+            inputs.get("rehab", {}) or {},
+            sqft_val, baths_val, pool_val, stories=stories_val,
+        )
+    except Exception:
+        initial_items = []
 rehab_df = pd.DataFrame(initial_items, columns=["Item", "Cost"])
 
 edited_rehab = st.data_editor(
@@ -411,3 +433,50 @@ try:
     )
 except Exception as e:
     st.error(f"Could not build the PDF: {e}")
+
+
+# ============================================================================
+# Persist current Dispo edits back to the deal record so they load next time
+# ============================================================================
+# We save on EVERY rerun — cheap Supabase write, keeps the state fresh. The
+# save uses the "dispo" sub-key of inputs so underwriting numbers stay clean.
+try:
+    save_dispo_edits(int(deal_id), {
+        "asking_price": int(asking_price) if asking_price else 0,
+        "arv_override": int(arv_override) if arv_override else 0,
+        "range_pct": float(range_pct),
+        "comps": clean_comps,
+        # rehab items are tuples in memory; JSON-safe as lists
+        "rehab_items": [[lbl, cost] for lbl, cost in clean_rehab],
+    })
+except Exception:
+    # Silent — don't block the page if the save has a transient hiccup.
+    pass
+
+
+st.markdown("---")
+_reset_col, _reset_help = st.columns([1, 3])
+with _reset_col:
+    if st.button(
+        "🔄 Reset from underwriting",
+        key="dispo_reset_btn",
+        use_container_width=True,
+        help="Discard all Dispo edits (comps, rehab items, asking, ARV "
+             "override, range %) and reload the initial underwriting values.",
+    ):
+        # Wipe saved dispo edits + widget state and re-run to reload defaults.
+        try:
+            save_dispo_edits(int(deal_id), {})
+        except Exception:
+            pass
+        for k in ["dispo_asking", "dispo_arv_override", "dispo_range_pct",
+                  "dispo_comps_editor", "dispo_rehab_editor",
+                  "_dispo_loaded_deal"]:
+            st.session_state.pop(k, None)
+        st.rerun()
+with _reset_help:
+    st.caption(
+        "Every edit above is auto-saved to this deal — leave the page and "
+        "come back anytime. The Reset button discards those edits and "
+        "reloads whatever's in the underwriting file."
+    )
