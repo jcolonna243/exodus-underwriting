@@ -54,10 +54,47 @@ def _top_comps(comps: List[Dict], n: int = 5) -> List[Dict]:
     return priced[:n]
 
 
-def _fmt_addr_short(prop: Dict) -> str:
-    """Short property line for headlines. Address + city."""
-    parts = [prop.get("address", ""), prop.get("city", "")]
-    return ", ".join(p for p in parts if p)
+def _fmt_addr_short(prop) -> str:
+    """Short property line for headlines. Uses the street portion of the
+    address (everything before the first comma) so we don't end up with
+    "1360 NW 197 St, Miami Gardens, FL 33169, Miami" style duplication."""
+    raw = str(prop.get("address", "") or "")
+    street = raw.split(",")[0].strip()
+    city = str(prop.get("city", "") or "").strip()
+    if street and city:
+        return f"{street}, {city}"
+    return street or city
+
+
+def _addr_short(addr: str, city: str = "") -> str:
+    """Same trim helper for comp rows: strip anything past the first comma,
+    then re-append city so the row shows "STREET, CITY" cleanly."""
+    street = str(addr or "").split(",")[0].strip()
+    city = str(city or "").strip()
+    if street and city:
+        return f"{street}, {city}"
+    return street or city
+
+
+def _clean_date(v) -> str:
+    """Normalize an ISO timestamp ("2026-07-05T11:57:46.356Z") to just the
+    date portion. Passes through anything else unchanged."""
+    s = str(v or "").strip()
+    if "T" in s:
+        return s.split("T")[0]
+    return s or "-"
+
+
+def _int_str(v) -> str:
+    """Render whole-number floats as "3" instead of "3.0"; keep fractional
+    baths like "2.5" intact. Non-numeric strings pass through."""
+    if v is None:
+        return "-"
+    try:
+        f = float(v)
+        return str(int(f)) if f == int(f) else f"{f:g}"
+    except Exception:
+        return str(v)
 
 
 def _fmt_money(v) -> str:
@@ -275,11 +312,20 @@ def build_dispo_marketing_pdf(
         f"{prop.get('zip', '')}"
     ).strip().strip(",").strip()
 
+    # Compact snapshot — skip the second city/state/zip row when the
+    # address already contains a comma (i.e. city+state+zip is embedded).
+    _has_embedded_city = "," in (addr or "")
     snap_data = [
         ["Property:", addr, "Beds / Baths:",
-         f"{prop.get('beds', '?')} / {prop.get('baths', '?')}"],
-        ["", csz, "Sqft:",
-         f"{int(prop.get('sqft', 0) or 0):,}"],
+         f"{_int_str(prop.get('beds'))} / {_int_str(prop.get('baths'))}"],
+    ]
+    if not _has_embedded_city:
+        snap_data.append(["", csz, "Sqft:",
+                          f"{int(prop.get('sqft', 0) or 0):,}"])
+    else:
+        snap_data.append(["", "", "Sqft:",
+                          f"{int(prop.get('sqft', 0) or 0):,}"])
+    snap_data += [
         ["County:", prop.get("county", "-") or "-", "Year built:",
          str(prop.get("year", "-") or "-")],
         ["Pool:", prop.get("pool", "No") or "No", "Stories:",
@@ -307,18 +353,24 @@ def build_dispo_marketing_pdf(
     asking_display = _fmt_money(asking) if asking is not None else "TBD"
     spread_display = _fmt_money(spread) if spread is not None else "TBD"
     range_pct_label = int(round(rehab_range_pct * 100))
+    # Dedicated metric-box style with generous leading so the 20pt value
+    # doesn't collide with the 10pt label above it.
+    metric_style = ParagraphStyle(
+        "Metric", parent=body_style, fontSize=10, leading=26,
+        alignment=TA_CENTER, spaceBefore=0, spaceAfter=0,
+    )
     math_data = [[
         Paragraph(
             '<font size="10" color="#666666"><b>ASKING</b></font><br/>'
             f'<font size="20" color="#1F4E78"><b>{asking_display}</b></font><br/>'
             '<font size="8" color="#666666">Your cash-buyer price</font>',
-            body_style,
+            metric_style,
         ),
         Paragraph(
             '<font size="10" color="#666666"><b>ARV</b></font><br/>'
             f'<font size="20" color="#1E7B3B"><b>{_fmt_money(arv)}</b></font><br/>'
             '<font size="8" color="#666666">Highest defensible comps</font>',
-            body_style,
+            metric_style,
         ),
         Paragraph(
             '<font size="10" color="#666666"><b>REHAB (LOW-HIGH)</b></font><br/>'
@@ -326,13 +378,13 @@ def build_dispo_marketing_pdf(
             '<font size="14" color="#666666"> - </font>'
             f'<font size="14" color="#C77700"><b>{_fmt_money(total_high)}</b></font><br/>'
             f'<font size="8" color="#666666">±{range_pct_label}% band on itemized estimate</font>',
-            body_style,
+            metric_style,
         ),
         Paragraph(
             '<font size="10" color="#666666"><b>SPREAD (mid)</b></font><br/>'
             f'<font size="20" color="#1E7B3B"><b>{spread_display}</b></font><br/>'
             '<font size="8" color="#666666">ARV − Asking − Rehab (mid)</font>',
-            body_style,
+            metric_style,
         ),
     ]]
     math_tbl = Table(
@@ -363,10 +415,13 @@ def build_dispo_marketing_pdf(
                 _fmt_money(mid),
                 _fmt_money(high),
             ])
+        # Est. total should reflect the CURRENT items (not the stale rec
+        # value) so the middle number always sits between LOW and HIGH.
+        est_total_from_items = sum(mid for _, _, mid, _ in ranged_items)
         rows.append([
             "TOTAL REHAB (LOW - HIGH)",
             _fmt_money(total_low),
-            _fmt_money(rehab_est),
+            _fmt_money(est_total_from_items),
             _fmt_money(total_high),
         ])
         rehab_tbl = Table(
@@ -413,19 +468,17 @@ def build_dispo_marketing_pdf(
         comp_rows = [["Address", "Beds", "Baths", "Sqft", "Sold For", "Sold Date"]]
         for c in comps:
             comp_rows.append([
-                (c.get("address") or "") + (
-                    f", {c.get('city', '')}" if c.get("city") else ""
-                ),
-                str(c.get("beds", "-") or "-"),
-                str(c.get("baths", "-") or "-"),
+                _addr_short(c.get("address"), c.get("city")),
+                _int_str(c.get("beds")),
+                _int_str(c.get("baths")),
                 f"{int(c.get('sqft', 0) or 0):,}" if c.get("sqft") else "-",
                 _fmt_money(c.get("sold_price", 0)),
-                str(c.get("sold_date", "-") or "-"),
+                _clean_date(c.get("sold_date")),
             ])
         comp_tbl = Table(
             comp_rows,
-            colWidths=[3.1 * inch, 0.5 * inch, 0.6 * inch, 0.8 * inch,
-                       1.0 * inch, 1.0 * inch],
+            colWidths=[3.4 * inch, 0.55 * inch, 0.6 * inch, 0.7 * inch,
+                       0.95 * inch, 1.0 * inch],
             style=TableStyle([
                 ("FONT", (0, 0), (-1, -1), "Helvetica", 8.5),
                 ("BACKGROUND", (0, 0), (-1, 0), brand_blue),
