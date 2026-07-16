@@ -46,9 +46,19 @@ def _rehab_range(
 
 
 def _top_comps(comps: List[Dict], n: int = 5) -> List[Dict]:
-    """Return the top-N comps by sold_price DESC. Skips comps with no price."""
+    """Return comps that support the ARV, sorted by sold_price DESC.
+    Preference order:
+      1. Comps Jo checked (include_in_arv=True) with a sold_price
+      2. If none are checked, fall back to top-N by sold_price DESC
+    In both cases the result is capped at n and sorted highest-first."""
     if not comps:
         return []
+    checked = [c for c in comps
+               if c.get("include_in_arv") and c.get("sold_price")]
+    if checked:
+        checked.sort(key=lambda c: float(c.get("sold_price") or 0), reverse=True)
+        return checked[:n]
+    # Backward-compat fallback: no checked comps yet
     priced = [c for c in comps if c.get("sold_price")]
     priced.sort(key=lambda c: float(c.get("sold_price") or 0), reverse=True)
     return priced[:n]
