@@ -569,9 +569,9 @@ if st.session_state.comps_df is not None and not st.session_state.comps_df.empty
             st.session_state.comps_df = edited
 
     # Show adjustment breakdown for each comp (if available)
-    if has_adjusted and "adjustments" in df.columns:
+    if has_adjusted and "adjustments" in _persist_df.columns:
         with st.expander("🔧 Adjustment details (click to see how each comp was adjusted)"):
-            for i, row in df.iterrows():
+            for i, row in _persist_df.iterrows():
                 adjs = row.get("adjustments") or []
                 if isinstance(adjs, list) and adjs:
                     addr = row.get("address", "?")
