@@ -518,9 +518,14 @@ with st.expander("📎 Or upload a comp report (PDF, CSV, Excel) — fallback fo
 
 if st.session_state.comps_df is not None and not st.session_state.comps_df.empty:
     st.write("**Candidate comps** — uncheck rows you don't want to use.")
-    df = st.session_state.comps_df
-    # If pulled from RentCast, show adjusted_price column too
-    has_adjusted = "adjusted_price" in df.columns and df["adjusted_price"].notna().any()
+    # NOTE: mutate st.session_state.comps_df in place (adding missing cols) so
+    # the object identity stays stable across reruns. Passing a NEW dataframe
+    # object (e.g. df[display_cols] slice) on each rerun causes st.data_editor
+    # to misalign its internal edit-delta with the base — the classic symptom
+    # is "typed value disappears on first entry, sticks on second".
+    _persist_df = st.session_state.comps_df
+    has_adjusted = ("adjusted_price" in _persist_df.columns
+                    and _persist_df["adjusted_price"].notna().any())
     if has_adjusted:
         display_cols = ["use", "address", "city", "sqft", "beds", "baths",
                         "year", "sold_price", "adjusted_price", "sold_date",
@@ -528,11 +533,15 @@ if st.session_state.comps_df is not None and not st.session_state.comps_df.empty
     else:
         display_cols = ["use", "address", "city", "sqft", "beds", "baths",
                         "year", "sold_price", "sold_date", "distance", "notes"]
+    # Ensure required columns exist on the persistent df (idempotent — safe
+    # to call every rerun since we only add cols that are missing).
     for col in display_cols:
-        if col not in df.columns: df[col] = None
+        if col not in _persist_df.columns:
+            _persist_df[col] = None
 
     edited = st.data_editor(
-        df[display_cols],
+        _persist_df,                       # pass the SAME object reference every render
+        column_order=display_cols,         # visibility/order without slicing
         column_config={
             "use": st.column_config.CheckboxColumn("Use?", default=True),
             "sold_price": st.column_config.NumberColumn(
@@ -549,7 +558,15 @@ if st.session_state.comps_df is not None and not st.session_state.comps_df.empty
         num_rows="dynamic",
         key="comps_editor",
     )
-    st.session_state.comps_df = edited
+    # Only sync back if the shape/content actually differs. Avoids the
+    # write-triggers-rerun-triggers-reconciliation loop that was nulling cells.
+    if edited is not None:
+        try:
+            _changed = not edited.equals(st.session_state.comps_df)
+        except Exception:
+            _changed = True
+        if _changed:
+            st.session_state.comps_df = edited
 
     # Show adjustment breakdown for each comp (if available)
     if has_adjusted and "adjustments" in df.columns:
