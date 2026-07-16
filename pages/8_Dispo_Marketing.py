@@ -141,9 +141,11 @@ st.markdown("---")
 st.markdown("## 🏘️ Comps — highest defensible")
 st.caption(
     "Pre-loaded from your underwriting file, sorted by sold price DESC. "
-    "Bump prices up to raise ARV. **Click the blank row at the bottom of the "
-    "table to add a new comp** — type the address, city, sold price, sqft, "
-    "etc. Only the **top 5** by sold price drive the ARV and print on the PDF."
+    "**Check the ✓ box** on each comp you want to include in the ARV "
+    "calculation — top-5 by sold price are auto-checked on first load. "
+    "Uncheck any bad comps (e.g., the subject property itself, or non-solds). "
+    "**Click the blank row at the bottom to add a new comp.** The comps you "
+    "check drive the ARV and print on the PDF."
 )
 
 # Prefer previously-saved Dispo edits; fall back to underwriting comps.
@@ -159,19 +161,28 @@ if _comps_cache_key not in st.session_state:
         comps_df = pd.DataFrame(saved_comps)
     else:
         comps_df = pd.DataFrame(columns=[
-            "address", "city", "beds", "baths", "sqft",
+            "include_in_arv", "address", "city", "beds", "baths", "sqft",
             "year", "sold_price", "sold_date",
         ])
-    display_cols = ["address", "city", "beds", "baths", "sqft",
-                    "year", "sold_price", "sold_date"]
+    display_cols = ["include_in_arv", "address", "city", "beds", "baths",
+                    "sqft", "year", "sold_price", "sold_date"]
     for c in display_cols:
         if c not in comps_df.columns:
-            comps_df[c] = None
+            comps_df[c] = False if c == "include_in_arv" else None
     comps_df = comps_df[display_cols]
     if "sold_price" in comps_df.columns:
         comps_df = comps_df.sort_values(
             by="sold_price", ascending=False, na_position="last",
         ).reset_index(drop=True)
+    # First-time auto-select: if no comp is checked, auto-check the top 5
+    # by sold_price. Jo can uncheck any (e.g. subject-property mispulls).
+    comps_df["include_in_arv"] = comps_df["include_in_arv"].fillna(False).astype(bool)
+    if not comps_df["include_in_arv"].any():
+        priced_mask = comps_df["sold_price"].notna()
+        top5_idx = comps_df[priced_mask].sort_values(
+            "sold_price", ascending=False,
+        ).head(5).index
+        comps_df.loc[top5_idx, "include_in_arv"] = True
     st.session_state[_comps_cache_key] = comps_df
 else:
     comps_df = st.session_state[_comps_cache_key]
@@ -182,6 +193,13 @@ edited_comps = st.data_editor(
     use_container_width=True,
     hide_index=True,
     column_config={
+        "include_in_arv": st.column_config.CheckboxColumn(
+            "Use for ARV",
+            help="Check to include this comp in the auto-ARV calculation. "
+                 "Uncheck the subject property or any non-sold listings.",
+            width="small",
+            default=False,
+        ),
         "address": st.column_config.TextColumn(
             "Address", width="large",
             help="Street address of the comp",
@@ -273,6 +291,7 @@ def _clean_comps(df: pd.DataFrame) -> List[Dict[str, Any]]:
         if pd.isna(row.get("address")) or not str(row.get("address")).strip():
             continue
         out.append({
+            "include_in_arv": bool(row.get("include_in_arv", False)),
             "address": str(row["address"]).strip(),
             "city": str(row.get("city") or "").strip(),
             "beds": row.get("beds") if pd.notna(row.get("beds")) else None,
@@ -300,18 +319,18 @@ def _clean_rehab(df: pd.DataFrame) -> List:
 
 def _compute_auto_arv(clean_comps: List[Dict[str, Any]],
                      subject_sqft: int) -> float:
-    """Auto-ARV = subject sqft × avg $/sqft of top-5 comps by sold price.
-    Only includes comps that have BOTH sold_price and sqft."""
+    """Auto-ARV = subject sqft × avg $/sqft of comps Jo CHECKED.
+    Only includes comps where include_in_arv=True AND has both
+    sold_price and sqft."""
     if not subject_sqft or subject_sqft <= 0:
         return 0.0
-    priced = [c for c in clean_comps
-              if c.get("sold_price") and c.get("sqft")
-              and float(c["sqft"]) > 0]
-    if not priced:
+    selected = [c for c in clean_comps
+                if c.get("include_in_arv")
+                and c.get("sold_price") and c.get("sqft")
+                and float(c["sqft"]) > 0]
+    if not selected:
         return 0.0
-    priced.sort(key=lambda c: c["sold_price"], reverse=True)
-    top5 = priced[:5]
-    ppsqft_vals = [float(c["sold_price"]) / float(c["sqft"]) for c in top5]
+    ppsqft_vals = [float(c["sold_price"]) / float(c["sqft"]) for c in selected]
     avg_ppsqft = sum(ppsqft_vals) / len(ppsqft_vals)
     # Round to nearest $1000 for clean presentation
     return round(avg_ppsqft * subject_sqft, -3)
@@ -335,23 +354,22 @@ with override_col:
     )
 with help_col:
     if subject_sqft > 0 and auto_arv > 0:
-        top5_priced = sorted(
-            [c for c in clean_comps
-             if c.get("sold_price") and c.get("sqft")
-             and float(c["sqft"]) > 0],
-            key=lambda c: c["sold_price"], reverse=True,
-        )[:5]
+        checked = [c for c in clean_comps
+                   if c.get("include_in_arv")
+                   and c.get("sold_price") and c.get("sqft")
+                   and float(c["sqft"]) > 0]
         avg_ppsqft = (sum(float(c["sold_price"]) / float(c["sqft"])
-                          for c in top5_priced) / len(top5_priced))
+                          for c in checked) / len(checked)) if checked else 0
         st.info(
             f"**Auto ARV: ${auto_arv:,.0f}** "
             f"(avg ${avg_ppsqft:,.0f}/sqft × {subject_sqft:,} sqft, "
-            f"from top {len(top5_priced)} comps)"
+            f"from {len(checked)} checked comp{'s' if len(checked) != 1 else ''})"
         )
     else:
         st.warning(
-            "Need at least 1 comp with both a Sold Price AND a Sqft, plus "
-            "a subject-property Sqft, to auto-calculate ARV."
+            "Need at least 1 **checked** comp with both a Sold Price AND a "
+            "Sqft, plus a subject-property Sqft, to auto-calculate ARV. "
+            "Check the ✓ box on the comps you want to use."
         )
 
 # Actual ARV = override if set, else auto
@@ -383,14 +401,14 @@ m4.metric(
     f"${spread:,.0f}" if spread is not None else "TBD",
 )
 
-st.markdown("### Top 5 comps that will print on the PDF")
+st.markdown("### Comps that will print on the PDF (checked ✓)")
 if clean_comps:
-    top5 = sorted(
-        [c for c in clean_comps if c.get("sold_price")],
+    checked_comps = sorted(
+        [c for c in clean_comps if c.get("include_in_arv") and c.get("sold_price")],
         key=lambda c: c["sold_price"], reverse=True,
-    )[:5]
-    if top5:
-        preview_df = pd.DataFrame(top5)
+    )
+    if checked_comps:
+        preview_df = pd.DataFrame(checked_comps)
         preview_cols = [c for c in ["address", "city", "beds", "baths",
                                      "sqft", "sold_price", "sold_date"]
                         if c in preview_df.columns]
@@ -408,7 +426,10 @@ if clean_comps:
             },
         )
     else:
-        st.warning("Add a Sold Price to at least 1 comp for the PDF to print.")
+        st.warning(
+            "No comps checked yet. Check the **✓ Use for ARV** box on at "
+            "least 1 comp (with a Sold Price) to include it in the PDF."
+        )
 else:
     st.warning("No comps to print. Add at least 1 with a sold price.")
 
