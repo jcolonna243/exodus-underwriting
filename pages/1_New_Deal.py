@@ -170,6 +170,8 @@ def _preload_deal(deal_id: int) -> bool:
         import pandas as _pd
         try:
             st.session_state["comps_df"] = _pd.DataFrame(saved_comps)
+            st.session_state.pop("_comps_current", None)
+            st.session_state.pop("comps_editor", None)
         except Exception:
             pass
 
@@ -494,6 +496,8 @@ if do_pull:
             df_pulled = pd.DataFrame(adjusted)
             df_pulled.insert(0, "use", True)
             st.session_state.comps_df = df_pulled
+            st.session_state.pop("_comps_current", None)
+            st.session_state.pop("comps_editor", None)
             st.success(f"✅ Pulled {len(adjusted)} comps (of {len(raw)} returned). "
                        f"RentCast AVM: ${result.get('subject_avm', 0):,.0f}.")
             st.rerun()
@@ -512,6 +516,8 @@ with st.expander("📎 Or upload a comp report (PDF, CSV, Excel) — fallback fo
             df = pd.DataFrame(comps)
             df.insert(0, "use", True)
             st.session_state.comps_df = df
+            st.session_state.pop("_comps_current", None)
+            st.session_state.pop("comps_editor", None)
             st.success(f"Imported {len(df)} comp candidates.")
         except Exception as e:
             st.error(f"Could not parse the file: {e}")
@@ -558,15 +564,13 @@ if st.session_state.comps_df is not None and not st.session_state.comps_df.empty
         num_rows="dynamic",
         key="comps_editor",
     )
-    # Only sync back if the shape/content actually differs. Avoids the
-    # write-triggers-rerun-triggers-reconciliation loop that was nulling cells.
+    # Store the current edited dataframe in a SEPARATE key so downstream
+    # blocks (save, ARV recompute) can read it, but do NOT overwrite
+    # st.session_state.comps_df — that would cause st.data_editor to see
+    # its base data change every rerun and reset the widget's edit-delta,
+    # which manifests as "typed value disappears on first entry".
     if edited is not None:
-        try:
-            _changed = not edited.equals(st.session_state.comps_df)
-        except Exception:
-            _changed = True
-        if _changed:
-            st.session_state.comps_df = edited
+        st.session_state["_comps_current"] = edited
 
     # Show adjustment breakdown for each comp (if available)
     if has_adjusted and "adjustments" in _persist_df.columns:
@@ -955,10 +959,18 @@ inputs_dict = {
     # Round-trip data so re-opening a saved deal doesn't trigger a fresh
     # RentCast pull (which would count against the monthly comp quota):
     "comps": (
-        st.session_state.comps_df.to_dict("records")
-        if (st.session_state.get("comps_df") is not None
-            and hasattr(st.session_state.comps_df, "to_dict"))
-        else None
+        # Prefer the always-fresh _comps_current mirror (populated by the
+        # data_editor each render). Falls back to comps_df on first render
+        # before the editor has run.
+        st.session_state["_comps_current"].to_dict("records")
+        if (st.session_state.get("_comps_current") is not None
+            and hasattr(st.session_state["_comps_current"], "to_dict"))
+        else (
+            st.session_state.comps_df.to_dict("records")
+            if (st.session_state.get("comps_df") is not None
+                and hasattr(st.session_state.comps_df, "to_dict"))
+            else None
+        )
     ),
     "arv_method": st.session_state.get("arv_method"),
 }
