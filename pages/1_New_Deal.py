@@ -671,6 +671,87 @@ def _toggle(key: str, label: str, type_options=None, default_type=None,
     st.session_state.rehab[key] = cfg
     return cfg
 
+
+def _toggle_with_cost_override(key: str, label: str, default_cost: int):
+    """Toggle row with an editable $ override next to it. Check the box
+    to include; the cost field pre-fills to the default but you can type
+    a different number to override for this specific deal."""
+    cols = st.columns([1, 2, 2, 2])
+    prev = st.session_state.rehab.get(key, {}) or {}
+    include = cols[0].checkbox(
+        label, key=f"rehab_{key}_include",
+        value=prev.get("include", False),
+    )
+    cfg = {"include": include}
+    if include:
+        _prev_cost = prev.get("cost_override")
+        cost = cols[1].number_input(
+            f"{label} cost (override)",
+            min_value=0,
+            value=int(_prev_cost) if _prev_cost else int(default_cost),
+            step=100,
+            key=f"rehab_{key}_cost_override",
+            label_visibility="collapsed",
+            help=f"Default is ${default_cost:,}. Type a different number to override for this deal only.",
+        )
+        cfg["cost_override"] = cost
+    st.session_state.rehab[key] = cfg
+    return cfg
+
+
+def _pool_multi_toggle():
+    """Multi-select pool repairs. Main 'Pool' checkbox gates the sub-items;
+    when checked, five sub-rows appear (Motor, Pump, Heater, Waterline Tile,
+    Diamond Brite) — each with its own checkbox + editable cost.
+    Backward-compatible with the pre-v24.14 single-select format on load."""
+    POOL_ITEMS = [
+        ("Replace Motor", 800),
+        ("Replace Pump", 1500),
+        ("Heater", 4000),
+        ("Waterline Tile", 3000),
+        ("Diamond Brite", 6500),
+    ]
+    cols = st.columns([1, 2, 2, 2])
+    prev = st.session_state.rehab.get("pool", {}) or {}
+    include = cols[0].checkbox(
+        "Pool", key="rehab_pool_include",
+        value=prev.get("include", False),
+    )
+    cfg = {"include": include, "items": {}}
+    if include:
+        cols[1].caption(
+            "Check each repair needed. Costs pre-fill to defaults — override any per deal."
+        )
+        prev_items = prev.get("items") or {}
+        # Migrate legacy single-select saved format into the new items dict
+        # so the previously-selected type shows up pre-checked.
+        if not prev_items and prev.get("type"):
+            prev_items = {prev["type"]: {"selected": True, "cost": None}}
+        for name, default_cost in POOL_ITEMS:
+            item_prev = prev_items.get(name) or {}
+            row = st.columns([0.5, 2, 2, 3])
+            selected = row[1].checkbox(
+                name, key=f"rehab_pool_{name.replace(' ', '_')}_sel",
+                value=bool(item_prev.get("selected", False)),
+            )
+            if selected:
+                _prev_c = item_prev.get("cost")
+                cost = row[2].number_input(
+                    f"{name} cost",
+                    min_value=0,
+                    value=int(_prev_c) if _prev_c else int(default_cost),
+                    step=100,
+                    key=f"rehab_pool_{name.replace(' ', '_')}_cost",
+                    label_visibility="collapsed",
+                    help=f"Default is ${default_cost:,}. Override for this deal.",
+                )
+            else:
+                cost = None
+            cfg["items"][name] = {"selected": selected, "cost": cost}
+    st.session_state.rehab["pool"] = cfg
+    return cfg
+
+
 with st.container(border=True):
     _toggle("roof", "Roof", ["Shingle", "Tile", "Flat"], "Shingle")
     _toggle("electrical", "Electrical",
@@ -719,16 +800,14 @@ with st.container(border=True):
             ["Non-Impact", "Impact", "New Shutter", "Replace Shutter"],
             "Non-Impact", qty_default=8)
     _toggle("plumbing", "Plumbing", manual_amount=True)
-    _toggle("landscaping", "Landscaping")
+    _toggle_with_cost_override("landscaping", "Landscaping", 1500)
     _toggle("appliances", "Appliances")
     _toggle("lighting", "Lighting (all new)")
     _toggle("hot_water_tank", "Hot Water Tank")
     _toggle("cosmetic_demo", "Cosmetic Demo")
     _toggle("final_cleaning", "Final Cleaning")
     if pool == "Yes":
-        _toggle("pool", "Pool",
-                ["Replace Motor", "Replace Pump", "Heater",
-                 "Waterline Tile", "Diamond Brite"], "Replace Motor")
+        _pool_multi_toggle()
 
 # Live rehab total + line-item breakdown — pass stories so roof math is correct
 sub_total = rehab_subtotal(st.session_state.rehab, sqft, baths, pool == "Yes",
