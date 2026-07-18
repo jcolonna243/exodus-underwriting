@@ -375,9 +375,13 @@ def rehab_subtotal(rehab: Dict[str, Any], sqft: int, baths: float, pool: bool,
     if plumb.get("include"):
         total += plumb.get("amount", 0) or 0
 
-    # Landscaping
-    if get("landscaping").get("include"):
-        total += r["landscaping"]
+    # Landscaping — honors per-deal cost override if set
+    _land = get("landscaping")
+    if _land.get("include"):
+        _land_cost = _land.get("cost_override")
+        if _land_cost is None or float(_land_cost) <= 0:
+            _land_cost = r["landscaping"]
+        total += float(_land_cost)
 
     # Appliances
     if get("appliances").get("include"):
@@ -399,17 +403,30 @@ def rehab_subtotal(rehab: Dict[str, Any], sqft: int, baths: float, pool: bool,
     if get("final_cleaning").get("include"):
         total += r["final_cleaning"]
 
-    # Pool (only if subject has pool)
+    # Pool (only if subject has pool). v24.14 — multi-select: sums every
+    # checked pool item, honoring per-item cost overrides. Falls back to the
+    # legacy single-select {"type": "..."} format for pre-v24.14 saved deals.
     pool_r = get("pool")
     if pool_r.get("include") and pool:
-        t = pool_r.get("type", "Replace Motor")
-        total += {
+        _pool_defaults = {
             "Replace Motor": r["pool_replace_motor"],
             "Replace Pump": r["pool_replace_pump"],
             "Heater": r["pool_heater"],
             "Waterline Tile": r["pool_waterline_tile"],
             "Diamond Brite": r["pool_diamond_brite"],
-        }.get(t, r["pool_replace_motor"])
+        }
+        _pool_items = pool_r.get("items") or {}
+        if _pool_items:
+            for _name, _cfg in _pool_items.items():
+                if _cfg.get("selected"):
+                    _c = _cfg.get("cost")
+                    if _c is None or float(_c) <= 0:
+                        _c = _pool_defaults.get(_name, 0)
+                    total += float(_c)
+        else:
+            # Legacy single-select fallback
+            t = pool_r.get("type", "Replace Motor")
+            total += _pool_defaults.get(t, r["pool_replace_motor"])
 
     # Other (manual)
     for key in ("other_1", "other_2"):
@@ -534,8 +551,12 @@ def rehab_breakdown(rehab: Dict[str, Any], sqft: int, baths: float, pool: bool,
     if plumb.get("include"):
         items.append(("Plumbing (manual)", plumb.get("amount", 0) or 0))
 
-    if get("landscaping").get("include"):
-        items.append(("Landscaping", r["landscaping"]))
+    _land_bd = get("landscaping")
+    if _land_bd.get("include"):
+        _land_cost_bd = _land_bd.get("cost_override")
+        if _land_cost_bd is None or float(_land_cost_bd) <= 0:
+            _land_cost_bd = r["landscaping"]
+        items.append(("Landscaping", float(_land_cost_bd)))
 
     if get("appliances").get("include"):
         items.append(("Appliances", r["appliances"]))
@@ -554,11 +575,26 @@ def rehab_breakdown(rehab: Dict[str, Any], sqft: int, baths: float, pool: bool,
 
     pool_r = get("pool")
     if pool_r.get("include") and pool:
-        t = pool_r.get("type", "Replace Motor")
-        amt = {"Replace Motor": r["pool_replace_motor"], "Replace Pump": r["pool_replace_pump"],
-               "Heater": r["pool_heater"], "Waterline Tile": r["pool_waterline_tile"],
-               "Diamond Brite": r["pool_diamond_brite"]}.get(t, r["pool_replace_motor"])
-        items.append((f"Pool ({t})", amt))
+        _pool_defaults_bd = {
+            "Replace Motor": r["pool_replace_motor"],
+            "Replace Pump": r["pool_replace_pump"],
+            "Heater": r["pool_heater"],
+            "Waterline Tile": r["pool_waterline_tile"],
+            "Diamond Brite": r["pool_diamond_brite"],
+        }
+        _pool_items_bd = pool_r.get("items") or {}
+        if _pool_items_bd:
+            for _name_bd, _cfg_bd in _pool_items_bd.items():
+                if _cfg_bd.get("selected"):
+                    _c_bd = _cfg_bd.get("cost")
+                    if _c_bd is None or float(_c_bd) <= 0:
+                        _c_bd = _pool_defaults_bd.get(_name_bd, 0)
+                    items.append((f"Pool ({_name_bd})", float(_c_bd)))
+        else:
+            # Legacy single-select fallback
+            t = pool_r.get("type", "Replace Motor")
+            amt = _pool_defaults_bd.get(t, r["pool_replace_motor"])
+            items.append((f"Pool ({t})", amt))
 
     for key in ("other_1", "other_2"):
         o = get(key)
