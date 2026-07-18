@@ -546,8 +546,9 @@ if st.session_state.comps_df is not None and not st.session_state.comps_df.empty
             _persist_df[col] = None
 
     edited = st.data_editor(
-        _persist_df,                       # pass the SAME object reference every render
-        column_order=display_cols,         # visibility/order without slicing
+        _persist_df[display_cols],         # slice to visible cols only — hides
+                                           # non-Arrow-serializable cols like
+                                           # 'adjustments' (mixed list/NaN dtype)
         column_config={
             "use": st.column_config.CheckboxColumn("Use?", default=True),
             "sold_price": st.column_config.NumberColumn(
