@@ -641,6 +641,25 @@ st.markdown("### 3. Rehab Estimate")
 if "rehab" not in st.session_state:
     st.session_state.rehab = {}
 
+def _nan_to_none(records):
+    """Replace pandas NaN / numpy nan with Python None in a list of dicts so
+    the result is JSON-serializable (Supabase can't accept NaN)."""
+    import math
+    out = []
+    for row in records or []:
+        clean = {}
+        for k, v in row.items():
+            try:
+                if isinstance(v, float) and math.isnan(v):
+                    clean[k] = None
+                    continue
+            except Exception:
+                pass
+            clean[k] = v
+        out.append(clean)
+    return out
+
+
 def _toggle(key: str, label: str, type_options=None, default_type=None,
             qty_default=None, manual_amount=False):
     """Render a rehab toggle row. Returns updated config dict."""
@@ -1038,10 +1057,11 @@ inputs_dict = {
     "params": params_override,
     # Round-trip data so re-opening a saved deal doesn't trigger a fresh
     # RentCast pull (which would count against the monthly comp quota):
-    "comps": (
+    "comps": _nan_to_none(
         # Prefer the always-fresh _comps_current mirror (populated by the
         # data_editor each render). Falls back to comps_df on first render
-        # before the editor has run.
+        # before the editor has run. Scrub NaN → None so json.dumps
+        # doesn't choke on blank cells.
         st.session_state["_comps_current"].to_dict("records")
         if (st.session_state.get("_comps_current") is not None
             and hasattr(st.session_state["_comps_current"], "to_dict"))
@@ -1049,7 +1069,7 @@ inputs_dict = {
             st.session_state.comps_df.to_dict("records")
             if (st.session_state.get("comps_df") is not None
                 and hasattr(st.session_state.comps_df, "to_dict"))
-            else None
+            else []
         )
     ),
     "arv_method": st.session_state.get("arv_method"),
